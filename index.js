@@ -1645,6 +1645,7 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
 
       console.log(chalk.green.bold('\n✅ WordPress setup completed successfully!'));
       console.log(chalk.cyan(`🌐 Your website is available at: http${this.config.valet.secure ? 's' : ''}://${this.websiteName}${this.config.valet.domain}`));
+      console.log(chalk.cyan(`🌐 Your website login is available at: http${this.config.valet.secure ? 's' : ''}://${this.websiteName}${this.config.valet.domain}/wp-admin`));
       console.log(chalk.gray(`📁 Website files: ${this.websitePath}`));
       console.log(chalk.gray(`🗄️  Database: ${this.dbName}`));
       console.log(chalk.gray(`👤 Admin user: ${this.config.wordpress.adminUser}`));
