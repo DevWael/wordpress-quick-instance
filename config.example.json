@@ -18,7 +18,16 @@
     "prefix": "wp_",
     "createUser": false,
     "userPrefix": "wp_",
-    "grantPrivileges": ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "INDEX", "ALTER"]
+    "grantPrivileges": ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "INDEX", "ALTER"],
+    "docker": {
+      "enabled": true,
+      "containerName": "mysql",
+      "image": "mysql:8.0",
+      "port": 3306,
+      "rootPassword": "your_mysql_root_password",
+      "dataVolume": "mysql_data",
+      "network": "bridge"
+    }
   },
   
   "// WordPress configuration": "WordPress installation and site settings",

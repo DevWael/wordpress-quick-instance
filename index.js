@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { Command } = require('commander');
-const inquirer = require('inquirer');
+const { prompt } = require('inquirer');
 const fs = require('fs-extra');
 const path = require('path');
 const { execSync } = require('child_process');
@@ -10,6 +10,7 @@ const ora = require('ora');
 const mysql = require('mysql2/promise');
 const axios = require('axios');
 const glob = require('glob');
+const util = require('util');
 
 const program = new Command();
 
@@ -61,7 +62,17 @@ class WordPressSetup {
         prefix: 'wp_', // WordPress table prefix
         createUser: false, // Create dedicated database user
         userPrefix: 'wp_', // Prefix for database user names
-        grantPrivileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'INDEX', 'ALTER']
+        grantPrivileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'INDEX', 'ALTER'],
+        // Docker MySQL configuration
+        docker: {
+          enabled: false, // Enable Docker MySQL support
+          containerName: 'mysql', // Docker container name
+          image: 'mysql:8.0', // MySQL Docker image
+          port: 3306, // Host port mapping
+          rootPassword: '', // Root password for MySQL
+          dataVolume: 'mysql_data', // Docker volume for data persistence
+          network: 'bridge' // Docker network
+        }
       },
       
       // WordPress configuration
@@ -334,7 +345,7 @@ class WordPressSetup {
       });
     }
 
-    const answers = await inquirer.prompt(questions);
+    const answers = await prompt(questions);
 
     this.websiteName = answers.websiteName;
     
@@ -355,9 +366,9 @@ class WordPressSetup {
     if (!this.config.backup.enabled) return;
 
     try {
-      const backupPath = this.config.backup.backupPath.startsWith('~') 
+      const backupPath = this.config.backup.backupPath && this.config.backup.backupPath.startsWith('~') 
         ? path.join(require('os').homedir(), this.config.backup.backupPath.slice(1))
-        : path.resolve(this.config.backup.backupPath);
+        : path.resolve(this.config.backup.backupPath || '~/Server/backups');
       
       await fs.ensureDir(backupPath);
       
@@ -373,7 +384,7 @@ class WordPressSetup {
       
       if (this.config.backup.includeDatabase) {
         const dbBackupPath = path.join(backupDir, 'database.sql');
-        const command = `mysqldump -h${this.config.database.host} -u${this.config.database.user} -p${this.config.database.password} -P${this.config.database.port} ${this.dbName} > "${dbBackupPath}"`;
+        const command = this.getMysqlCommand(`mysqldump -h${this.config.database.host} -u${this.config.database.user} -p${this.config.database.password} -P${this.config.database.port} ${this.dbName} > "${dbBackupPath}"`);
         execSync(command, { stdio: 'pipe' });
       }
       
@@ -418,7 +429,7 @@ class WordPressSetup {
           await fs.remove(this.websitePath);
         } else {
           spinner.fail('Website directory already exists');
-          const { overwrite } = await inquirer.prompt([
+          const { overwrite } = await prompt([
             {
               type: 'confirm',
               name: 'overwrite',
@@ -443,7 +454,7 @@ class WordPressSetup {
       
       // Create subdirectories if configured
       if (this.config.server.createSubdirectories) {
-        const year = new Date().getFullYear();
+        const year = String(new Date().getFullYear());
         const month = String(new Date().getMonth() + 1).padStart(2, '0');
         await fs.ensureDir(path.join(this.websitePath, 'wp-content', 'uploads', year, month));
       }
@@ -488,6 +499,11 @@ class WordPressSetup {
     const spinner = ora('Creating database...').start();
     
     try {
+      // Ensure Docker MySQL is ready if enabled
+      if (this.config.database.docker.enabled) {
+        await this.ensureDockerMysql();
+      }
+
       const connection = await mysql.createConnection({
         host: this.config.database.host,
         user: this.config.database.user,
@@ -500,7 +516,20 @@ class WordPressSetup {
       
       // Create new database with charset and collate
       const createDbQuery = `CREATE DATABASE \`${this.dbName}\` CHARACTER SET ${this.config.database.charset} COLLATE ${this.config.database.collate}`;
+      if (this.config.advanced.verbose) {
+        console.log(chalk.gray(`Creating database: ${createDbQuery}`));
+      }
       await connection.execute(createDbQuery);
+      
+      // Verify database was created
+      const [rows] = await connection.execute(`SHOW DATABASES LIKE '${this.dbName}'`);
+      if (rows.length === 0) {
+        throw new Error(`Failed to create database: ${this.dbName}`);
+      }
+      
+      if (this.config.advanced.verbose) {
+        console.log(chalk.gray(`Database created successfully: ${this.dbName}`));
+      }
 
       // Create dedicated user if configured
       if (this.config.database.createUser) {
@@ -536,6 +565,123 @@ class WordPressSetup {
       password += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return password;
+  }
+
+  getMysqlCommand(command) {
+    if (this.config.database.docker.enabled) {
+      // When using Docker, we need to connect to localhost:3306 inside the container
+      let dockerCommand = command
+        .replace(`-h${this.config.database.host}`, '-hlocalhost')
+        .replace(`-P${this.config.database.port}`, '-P3306');
+      
+      // Remove empty password parameter
+      if (this.config.database.password === '') {
+        dockerCommand = dockerCommand.replace('-p ', '');
+      }
+      
+      return `docker exec ${this.config.database.docker.containerName} ${dockerCommand}`;
+    }
+    return command;
+  }
+
+  async ensureDockerMysql() {
+    if (!this.config.database.docker.enabled) return;
+
+    const spinner = ora('Checking Docker MySQL container...').start();
+    
+    try {
+      // Check if container exists
+      const checkCommand = `docker ps -a --filter name=${this.config.database.docker.containerName} --format "{{.Names}}"`;
+      let containerExists = '';
+      try {
+        containerExists = execSync(checkCommand, { stdio: 'pipe' }).toString().trim();
+      } catch (error) {
+        // Container doesn't exist
+        containerExists = '';
+      }
+      
+      if (!containerExists) {
+        spinner.text = 'Creating Docker MySQL container...';
+        await this.createDockerMysql();
+      } else {
+        // Check if container is running
+        const runningCommand = `docker ps --filter name=${this.config.database.docker.containerName} --format "{{.Names}}"`;
+        let isRunning = '';
+        try {
+          isRunning = execSync(runningCommand, { stdio: 'pipe' }).toString().trim();
+        } catch (error) {
+          // Container is not running
+          isRunning = '';
+        }
+        
+        if (!isRunning) {
+          spinner.text = 'Starting Docker MySQL container...';
+          execSync(`docker start ${this.config.database.docker.containerName}`, { stdio: 'pipe' });
+          
+          // Wait for MySQL to be ready
+          spinner.text = 'Waiting for MySQL to be ready...';
+          await this.waitForMysql();
+        }
+      }
+      
+      spinner.succeed('Docker MySQL container is ready');
+    } catch (error) {
+      spinner.fail('Failed to setup Docker MySQL');
+      throw error;
+    }
+  }
+
+  async createDockerMysql() {
+    const dockerConfig = this.config.database.docker;
+    const rootPassword = dockerConfig.rootPassword || this.config.database.password;
+    
+    // Create Docker volume if it doesn't exist
+    try {
+      execSync(`docker volume create ${dockerConfig.dataVolume}`, { stdio: 'pipe' });
+    } catch (error) {
+      // Volume might already exist, continue
+    }
+    
+    const command = `docker run -d \
+      --name ${dockerConfig.containerName} \
+      -e MYSQL_ROOT_PASSWORD=${rootPassword} \
+      -p ${dockerConfig.port}:3306 \
+      -v ${dockerConfig.dataVolume}:/var/lib/mysql \
+      --network ${dockerConfig.network} \
+      ${dockerConfig.image}`;
+    
+    try {
+      execSync(command, { stdio: 'pipe' });
+    } catch (error) {
+      // Container might already exist, try to start it instead
+      try {
+        execSync(`docker start ${dockerConfig.containerName}`, { stdio: 'pipe' });
+      } catch (startError) {
+        throw new Error(`Failed to create or start MySQL container: ${error.message}`);
+      }
+    }
+    
+    // Wait for MySQL to be ready
+    await this.waitForMysql();
+  }
+
+  async waitForMysql(maxAttempts = 30) {
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const testCommand = this.getMysqlCommand(`mysql -h${this.config.database.host} -u${this.config.database.user} -p${this.config.database.password} -P${this.config.database.port} -e "SELECT 1"`);
+        if (this.config.advanced.verbose) {
+          console.log(chalk.gray(`Testing MySQL connection: ${testCommand}`));
+        }
+        execSync(testCommand, { stdio: 'pipe' });
+        return; // MySQL is ready
+      } catch (error) {
+        if (this.config.advanced.verbose) {
+          console.log(chalk.yellow(`MySQL connection attempt ${i + 1} failed: ${error.message}`));
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+      }
+    }
+    throw new Error('MySQL did not become ready within the timeout period');
   }
 
   async updateWpConfig() {
@@ -579,34 +725,66 @@ class WordPressSetup {
       
       // Add development settings
       if (this.config.development.enableDebug) {
-        const debugSettings = `
-// Development settings
-define( 'WP_DEBUG', ${this.config.development.debugLog} );
-define( 'WP_DEBUG_LOG', ${this.config.development.wpDebugLog} );
-define( 'WP_DEBUG_DISPLAY', ${this.config.development.wpDebugDisplay} );
-define( 'SCRIPT_DEBUG', ${this.config.development.scriptDebug} );
-define( 'SAVEQUERIES', ${this.config.development.saveQueries} );`;
+        const debugSettings = [];
         
-        wpConfig = wpConfig.replace(
-          /\/\*\s*That's all, stop editing!.*$/s,
-          `${debugSettings}\n\n/* That's all, stop editing! Happy publishing. */`
-        );
+        // Check and add WP_DEBUG if not already defined
+        if (!wpConfig.includes("define( 'WP_DEBUG'") && !wpConfig.includes('define( "WP_DEBUG"')) {
+          debugSettings.push(`define( 'WP_DEBUG', ${this.config.development.debugLog} );`);
+        }
+        
+        // Check and add WP_DEBUG_LOG if not already defined
+        if (!wpConfig.includes("define( 'WP_DEBUG_LOG'") && !wpConfig.includes('define( "WP_DEBUG_LOG"')) {
+          debugSettings.push(`define( 'WP_DEBUG_LOG', ${this.config.development.wpDebugLog} );`);
+        }
+        
+        // Check and add WP_DEBUG_DISPLAY if not already defined
+        if (!wpConfig.includes("define( 'WP_DEBUG_DISPLAY'") && !wpConfig.includes('define( "WP_DEBUG_DISPLAY"')) {
+          debugSettings.push(`define( 'WP_DEBUG_DISPLAY', ${this.config.development.wpDebugDisplay} );`);
+        }
+        
+        // Check and add SCRIPT_DEBUG if not already defined
+        if (!wpConfig.includes("define( 'SCRIPT_DEBUG'") && !wpConfig.includes('define( "SCRIPT_DEBUG"')) {
+          debugSettings.push(`define( 'SCRIPT_DEBUG', ${this.config.development.scriptDebug} );`);
+        }
+        
+        // Check and add SAVEQUERIES if not already defined
+        if (!wpConfig.includes("define( 'SAVEQUERIES'") && !wpConfig.includes('define( "SAVEQUERIES"')) {
+          debugSettings.push(`define( 'SAVEQUERIES', ${this.config.development.saveQueries} );`);
+        }
+        
+        // Only add debug settings if there are any to add
+        if (debugSettings.length > 0) {
+          const debugSettingsBlock = `
+// Development settings
+${debugSettings.join('\n')}`;
+          
+          wpConfig = wpConfig.replace(
+            /\/\*\s*That's all, stop editing!.*$/s,
+            `${debugSettingsBlock}\n\n/* That's all, stop editing! Happy publishing. */`
+          );
+        }
       }
       
       // Add security settings
       if (this.config.security.disableFileEditing) {
-        wpConfig = wpConfig.replace(
-          /\/\*\s*That's all, stop editing!.*$/s,
-          `\ndefine( 'DISALLOW_FILE_EDIT', true );\n\n/* That's all, stop editing! Happy publishing. */`
-        );
+        // Check if DISALLOW_FILE_EDIT is not already defined
+        if (!wpConfig.includes("define( 'DISALLOW_FILE_EDIT'") && !wpConfig.includes('define( "DISALLOW_FILE_EDIT"')) {
+          wpConfig = wpConfig.replace(
+            /\/\*\s*That's all, stop editing!.*$/s,
+            `\ndefine( 'DISALLOW_FILE_EDIT', true );\n\n/* That's all, stop editing! Happy publishing. */`
+          );
+        }
       }
       
       // Add performance settings
       if (this.config.wordpress.memoryLimit) {
-        wpConfig = wpConfig.replace(
-          /\/\*\s*That's all, stop editing!.*$/s,
-          `\ndefine( 'WP_MEMORY_LIMIT', '${this.config.wordpress.memoryLimit}' );\n\n/* That's all, stop editing! Happy publishing. */`
-        );
+        // Check if WP_MEMORY_LIMIT is not already defined
+        if (!wpConfig.includes("define( 'WP_MEMORY_LIMIT'") && !wpConfig.includes('define( "WP_MEMORY_LIMIT"')) {
+          wpConfig = wpConfig.replace(
+            /\/\*\s*That's all, stop editing!.*$/s,
+            `\ndefine( 'WP_MEMORY_LIMIT', '${this.config.wordpress.memoryLimit}' );\n\n/* That's all, stop editing! Happy publishing. */`
+          );
+        }
       }
       
       // Add custom wp-config lines
@@ -615,6 +793,14 @@ define( 'SAVEQUERIES', ${this.config.development.saveQueries} );`;
         wpConfig = wpConfig.replace(
           /\/\*\s*That's all, stop editing!.*$/s,
           `${customConfig}\n/* That's all, stop editing! Happy publishing. */`
+        );
+      }
+      
+      // Ensure wp-config.php ends with proper WordPress loading
+      if (!wpConfig.includes("require_once(ABSPATH . 'wp-settings.php');")) {
+        wpConfig = wpConfig.replace(
+          /\/\*\s*That's all, stop editing!.*$/s,
+          `\n/* That's all, stop editing! Happy publishing. */\n\nrequire_once(ABSPATH . 'wp-settings.php');`
         );
       }
       
@@ -672,20 +858,44 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       const dbUser = this.dbUser || this.config.database.user;
       const dbPassword = this.dbPassword || this.config.database.password;
 
-      const command = `mysql -h${this.config.database.host} -u${dbUser} -p${dbPassword} -P${this.config.database.port} ${this.dbName} < "${sqlPath}"`;
+      let command;
+      if (this.config.database.docker.enabled) {
+        // For Docker, use docker exec with input redirection
+        const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+        command = `docker exec -i ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} < "${sqlPath}"`;
+      } else {
+        // For regular MySQL
+        const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+        command = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} < "${sqlPath}"`;
+      }
+      
       execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
       
       // Optimize database if configured
       if (this.config.sql.optimizeAfterImport) {
         spinner.text = 'Optimizing database...';
-        const optimizeCommand = `mysql -h${this.config.database.host} -u${dbUser} -p${dbPassword} -P${this.config.database.port} ${this.dbName} -e "OPTIMIZE TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        let optimizeCommand;
+        if (this.config.database.docker.enabled) {
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          optimizeCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "OPTIMIZE TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        } else {
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          optimizeCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "OPTIMIZE TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        }
         execSync(optimizeCommand, { stdio: 'pipe' });
       }
       
       // Repair database if configured
       if (this.config.sql.repairAfterImport) {
         spinner.text = 'Repairing database...';
-        const repairCommand = `mysql -h${this.config.database.host} -u${dbUser} -p${dbPassword} -P${this.config.database.port} ${this.dbName} -e "REPAIR TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        let repairCommand;
+        if (this.config.database.docker.enabled) {
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          repairCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "REPAIR TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        } else {
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          repairCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "REPAIR TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        }
         execSync(repairCommand, { stdio: 'pipe' });
       }
       
@@ -720,7 +930,14 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
         const regexFlag = this.config.sql.searchReplace.regex ? '--regex' : '';
         
         const command = `wp search-replace "${oldUrl}" "${newUrl}" --path="${this.websitePath}" --all-tables ${dryRunFlag} ${caseSensitiveFlag} ${regexFlag}`;
-        execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        
+        try {
+          execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        } catch (wpError) {
+          // If WP-CLI fails, try direct MySQL approach
+          console.log(chalk.yellow('WP-CLI search-replace failed, trying direct MySQL approach...'));
+          await this.performDirectSearchReplace(oldUrl, newUrl);
+        }
       }
       
       // Perform domain replacement
@@ -733,7 +950,14 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
         const regexFlag = this.config.sql.searchReplace.regex ? '--regex' : '';
         
         const domainCommand = `wp search-replace "${oldDomain}" "${newDomain}" --path="${this.websitePath}" --all-tables ${dryRunFlag} ${caseSensitiveFlag} ${regexFlag}`;
-        execSync(domainCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        
+        try {
+          execSync(domainCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        } catch (wpError) {
+          // If WP-CLI fails, try direct MySQL approach
+          console.log(chalk.yellow('WP-CLI domain replacement failed, trying direct MySQL approach...'));
+          await this.performDirectSearchReplace(oldDomain, newDomain);
+        }
       }
       
       // Perform additional replacements
@@ -744,13 +968,223 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
           const regexFlag = this.config.sql.searchReplace.regex ? '--regex' : '';
           
           const additionalCommand = `wp search-replace "${replacement.search}" "${replacement.replace}" --path="${this.websitePath}" --all-tables ${dryRunFlag} ${caseSensitiveFlag} ${regexFlag}`;
-          execSync(additionalCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+          
+          try {
+            execSync(additionalCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+          } catch (wpError) {
+            // If WP-CLI fails, try direct MySQL approach
+            console.log(chalk.yellow(`WP-CLI replacement failed for "${replacement.search}", trying direct MySQL approach...`));
+            await this.performDirectSearchReplace(replacement.search, replacement.replace);
+          }
         }
       }
       
       spinner.succeed('Search-replace completed successfully');
     } catch (error) {
       spinner.fail('Failed to perform search-replace');
+      throw error;
+    }
+  }
+
+  async performDirectSearchReplace(search, replace) {
+    try {
+      // Get database connection details
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      // Get all tables in the database
+      let showTablesCommand;
+      if (this.config.database.docker.enabled) {
+        showTablesCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "SHOW TABLES"`;
+      } else {
+        showTablesCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "SHOW TABLES"`;
+      }
+      
+      const tablesOutput = execSync(showTablesCommand, { stdio: 'pipe' }).toString();
+      const tables = tablesOutput.split('\n').filter(line => line.trim() && !line.includes('Tables_in_'));
+      
+      // Perform search-replace on each table
+      for (const table of tables) {
+        let updateCommand;
+        if (this.config.database.docker.enabled) {
+          updateCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "UPDATE \\\`${table}\\\` SET option_value = REPLACE(option_value, '${search}', '${replace}') WHERE option_value LIKE '%${search}%'"`;
+        } else {
+          updateCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "UPDATE \\\`${table}\\\` SET option_value = REPLACE(option_value, '${search}', '${replace}') WHERE option_value LIKE '%${search}%'"`;
+        }
+        
+        try {
+          execSync(updateCommand, { stdio: 'pipe' });
+        } catch (error) {
+          // Table might not have option_value column, try other common columns
+          const commonColumns = ['post_content', 'post_excerpt', 'post_title', 'comment_content', 'meta_value'];
+          for (const column of commonColumns) {
+            try {
+              let columnUpdateCommand;
+              if (this.config.database.docker.enabled) {
+                columnUpdateCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "UPDATE \\\`${table}\\\` SET \\\`${column}\\\` = REPLACE(\\\`${column}\\\`, '${search}', '${replace}') WHERE \\\`${column}\\\` LIKE '%${search}%'"`;
+              } else {
+                columnUpdateCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "UPDATE \\\`${table}\\\` SET \\\`${column}\\\` = REPLACE(\\\`${column}\\\`, '${search}', '${replace}') WHERE \\\`${column}\\\` LIKE '%${search}%'"`;
+              }
+              execSync(columnUpdateCommand, { stdio: 'pipe' });
+            } catch (columnError) {
+              // Column doesn't exist in this table, continue
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(chalk.yellow(`Direct MySQL search-replace failed: ${error.message}`));
+    }
+  }
+
+  async checkAdminUserExists() {
+    try {
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.dbPassword || this.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      let checkCommand;
+      if (this.config.database.docker.enabled) {
+        checkCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "SELECT COUNT(*) as count FROM ${this.config.database.prefix}users WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+      } else {
+        checkCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "SELECT COUNT(*) as count FROM ${this.config.database.prefix}users WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+      }
+      
+      const output = execSync(checkCommand, { stdio: 'pipe' }).toString();
+      const lines = output.split('\n').filter(line => line.trim() && !line.includes('count'));
+      
+      if (lines.length > 0) {
+        const count = parseInt(lines[0].trim());
+        return count > 0;
+      }
+      
+      return false;
+    } catch (error) {
+      if (this.config.advanced.verbose) {
+        console.log(chalk.yellow(`Error checking admin user: ${error.message}`));
+      }
+      return false;
+    }
+  }
+
+  async updateAdminUserPassword() {
+    const spinner = ora('Updating admin user password...').start();
+    
+    try {
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.dbPassword || this.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      // Hash the password using WordPress's password hashing
+      const hashedPassword = await this.hashWordPressPassword(this.adminPassword);
+      
+      let updateCommand;
+      if (this.config.database.docker.enabled) {
+        updateCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "UPDATE ${this.config.database.prefix}users SET user_pass = '${hashedPassword}' WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+      } else {
+        updateCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "UPDATE ${this.config.database.prefix}users SET user_pass = '${hashedPassword}' WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+      }
+      
+      execSync(updateCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      
+      spinner.succeed('Admin user password updated successfully');
+    } catch (error) {
+      spinner.fail('Failed to update admin user password');
+      throw error;
+    }
+  }
+
+  async createAdminUser() {
+    const spinner = ora('Creating admin user...').start();
+    
+    try {
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.dbPassword || this.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      // Hash the password using WordPress's password hashing
+      const hashedPassword = await this.hashWordPressPassword(this.adminPassword);
+      
+      // Get the current timestamp
+      const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      
+      let insertCommand;
+      if (this.config.database.docker.enabled) {
+        insertCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "INSERT INTO ${this.config.database.prefix}users (user_login, user_pass, user_nicename, user_email, user_url, user_registered, user_activation_key, user_status, display_name) VALUES ('${this.config.wordpress.adminUser}', '${hashedPassword}', '${this.config.wordpress.adminUser}', '${this.adminEmail}', '', '${now}', '', 0, '${this.config.wordpress.adminUser}')"`;
+      } else {
+        insertCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "INSERT INTO ${this.config.database.prefix}users (user_login, user_pass, user_nicename, user_email, user_url, user_registered, user_activation_key, user_status, display_name) VALUES ('${this.config.wordpress.adminUser}', '${hashedPassword}', '${this.config.wordpress.adminUser}', '${this.adminEmail}', '', '${now}', '', 0, '${this.config.wordpress.adminUser}')"`;
+      }
+      
+      execSync(insertCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      
+      // Get the user ID
+      let getUserIdCommand;
+      if (this.config.database.docker.enabled) {
+        getUserIdCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "SELECT ID FROM ${this.config.database.prefix}users WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+      } else {
+        getUserIdCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "SELECT ID FROM ${this.config.database.prefix}users WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+      }
+      
+      const userIdOutput = execSync(getUserIdCommand, { stdio: 'pipe' }).toString();
+      const userIdLines = userIdOutput.split('\n').filter(line => line.trim() && !line.includes('ID'));
+      const userId = userIdLines.length > 0 ? userIdLines[0].trim() : null;
+      
+      if (userId) {
+        // Add admin capabilities
+        let addCapabilitiesCommand;
+        if (this.config.database.docker.enabled) {
+          addCapabilitiesCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "INSERT INTO ${this.config.database.prefix}usermeta (user_id, meta_key, meta_value) VALUES (${userId}, '${this.config.database.prefix}capabilities', 'a:1:{s:13:\\\"administrator\\\";b:1;}'), (${userId}, '${this.config.database.prefix}user_level', '10')"`;
+        } else {
+          addCapabilitiesCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "INSERT INTO ${this.config.database.prefix}usermeta (user_id, meta_key, meta_value) VALUES (${userId}, '${this.config.database.prefix}capabilities', 'a:1:{s:13:\\\"administrator\\\";b:1;}'), (${userId}, '${this.config.database.prefix}user_level', '10')"`;
+        }
+        
+        execSync(addCapabilitiesCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      }
+      
+      spinner.succeed('Admin user created successfully');
+    } catch (error) {
+      spinner.fail('Failed to create admin user');
+      throw error;
+    }
+  }
+
+  async hashWordPressPassword(password) {
+    try {
+      // Use WP-CLI to hash the password
+      const command = `wp eval "echo wp_hash_password('${password}');" --path="${this.websitePath}"`;
+      const hashedPassword = execSync(command, { stdio: 'pipe' }).toString().trim();
+      return hashedPassword;
+    } catch (error) {
+      // Fallback to a simple hash if WP-CLI fails
+      const crypto = require('crypto');
+      const hash = crypto.createHash('md5').update(password).digest('hex');
+      return `$P$B${hash}`; // WordPress-style hash prefix
+    }
+  }
+
+  async manageAdminUser() {
+    if (!this.config.sql.source) {
+      // No database import, skip admin user management
+      return;
+    }
+
+    const spinner = ora('Managing admin user...').start();
+    
+    try {
+      const adminUserExists = await this.checkAdminUserExists();
+      
+      if (adminUserExists) {
+        spinner.text = 'Admin user exists, updating password...';
+        await this.updateAdminUserPassword();
+      } else {
+        spinner.text = 'Admin user does not exist, creating new user...';
+        await this.createAdminUser();
+      }
+      
+      spinner.succeed('Admin user management completed successfully');
+    } catch (error) {
+      spinner.fail('Failed to manage admin user');
       throw error;
     }
   }
@@ -954,8 +1388,11 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       // Set permissions if configured
       if (this.config.uploads.setPermissions) {
         spinner.text = 'Setting uploads permissions...';
-        const files = await glob('**/*', { cwd: uploadsTarget, nodir: true });
-        const dirs = await glob('**/*', { cwd: uploadsTarget, nodir: false });
+        
+        // Use util.promisify to convert glob to Promise-based
+        const globAsync = util.promisify(glob);
+        const files = await globAsync('**/*', { cwd: uploadsTarget, nodir: true });
+        const dirs = await globAsync('**/*', { cwd: uploadsTarget, nodir: false });
         
         for (const file of files) {
           await fs.chmod(path.join(uploadsTarget, file), this.config.uploads.permissions.files);
@@ -1099,7 +1536,9 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       // Run before setup hooks
       if (this.config.custom.hooks.beforeSetup && this.config.custom.hooks.beforeSetup.length > 0) {
         for (const hook of this.config.custom.hooks.beforeSetup) {
-          execSync(hook, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+          // Replace wp commands with proper path
+          const hookWithPath = hook.replace(/wp /g, `wp --path="${this.websitePath}" `);
+          execSync(hookWithPath, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
         }
       }
 
@@ -1114,18 +1553,23 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       } else {
         await this.importDatabase();
         await this.performSearchReplace();
+        await this.manageAdminUser();
         
         // Run after database import hooks
         if (this.config.custom.hooks.afterDatabaseImport && this.config.custom.hooks.afterDatabaseImport.length > 0) {
           for (const hook of this.config.custom.hooks.afterDatabaseImport) {
-            execSync(hook, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+            // Replace wp commands with proper path
+            const hookWithPath = hook.replace(/wp /g, `wp --path="${this.websitePath}" `);
+            execSync(hookWithPath, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
           }
         }
         
         // Run after search-replace hooks
         if (this.config.custom.hooks.afterSearchReplace && this.config.custom.hooks.afterSearchReplace.length > 0) {
           for (const hook of this.config.custom.hooks.afterSearchReplace) {
-            execSync(hook, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+            // Replace wp commands with proper path
+            const hookWithPath = hook.replace(/wp /g, `wp --path="${this.websitePath}" `);
+            execSync(hookWithPath, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
           }
         }
       }
@@ -1143,7 +1587,9 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       // Run after setup hooks
       if (this.config.custom.hooks.afterSetup && this.config.custom.hooks.afterSetup.length > 0) {
         for (const hook of this.config.custom.hooks.afterSetup) {
-          execSync(hook, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+          // Replace wp commands with proper path
+          const hookWithPath = hook.replace(/wp /g, `wp --path="${this.websitePath}" `);
+          execSync(hookWithPath, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
         }
       }
 
@@ -1203,6 +1649,27 @@ program
       });
     } catch (error) {
       console.error(chalk.red('Error reading Server directory:'), error.message);
+    }
+  });
+
+program
+  .command('docker-mysql')
+  .description('Create and start Docker MySQL container')
+  .action(async () => {
+    try {
+      const setup = new WordPressSetup();
+      await setup.loadConfig();
+      
+      if (!setup.config.database.docker.enabled) {
+        console.log(chalk.yellow('Docker MySQL is not enabled in config.'));
+        return;
+      }
+      
+      await setup.ensureDockerMysql();
+      console.log(chalk.green('✅ Docker MySQL container is ready!'));
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to setup Docker MySQL:'), error.message);
+      process.exit(1);
     }
   });
 
