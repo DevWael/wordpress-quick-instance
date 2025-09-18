@@ -1197,6 +1197,86 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
     }
   }
 
+  async updateSiteSettings() {
+    const spinner = ora('Updating site settings...').start();
+    
+    try {
+      // Update site title
+      if (this.config.wordpress.siteTitle) {
+        const titleCommand = `wp option update blogname "${this.config.wordpress.siteTitle}" --path="${this.websitePath}"`;
+        execSync(titleCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      }
+      
+      // Update site description
+      if (this.config.wordpress.siteDescription) {
+        const descriptionCommand = `wp option update blogdescription "${this.config.wordpress.siteDescription}" --path="${this.websitePath}"`;
+        execSync(descriptionCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      }
+      
+      // Update admin email
+      if (this.adminEmail) {
+        const emailCommand = `wp option update admin_email "${this.adminEmail}" --path="${this.websitePath}"`;
+        execSync(emailCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      }
+      
+      // Configure WordPress settings
+      if (this.config.wordpress.usePermalinks) {
+        const permalinkCommand = `wp rewrite structure "${this.config.wordpress.permalinkStructure}" --path="${this.websitePath}"`;
+        execSync(permalinkCommand, { stdio: 'pipe' });
+      }
+      
+      if (this.config.wordpress.disableComments) {
+        const commentsCommand = `wp option update default_comment_status closed --path="${this.websitePath}"`;
+        execSync(commentsCommand, { stdio: 'pipe' });
+      }
+      
+      if (this.config.wordpress.disableTrackbacks) {
+        const trackbacksCommand = `wp option update default_ping_status closed --path="${this.websitePath}"`;
+        execSync(trackbacksCommand, { stdio: 'pipe' });
+      }
+      
+      if (this.config.wordpress.disablePingbacks) {
+        const pingbacksCommand = `wp option update default_pingback_flag 0 --path="${this.websitePath}"`;
+        execSync(pingbacksCommand, { stdio: 'pipe' });
+      }
+      
+      // Set timezone
+      if (this.config.wordpress.timezone) {
+        const timezoneCommand = `wp option update timezone_string "${this.config.wordpress.timezone}" --path="${this.websitePath}"`;
+        execSync(timezoneCommand, { stdio: 'pipe' });
+      }
+      
+      // Set date format
+      if (this.config.wordpress.dateFormat) {
+        const dateFormatCommand = `wp option update date_format "${this.config.wordpress.dateFormat}" --path="${this.websitePath}"`;
+        execSync(dateFormatCommand, { stdio: 'pipe' });
+      }
+      
+      // Set time format
+      if (this.config.wordpress.timeFormat) {
+        const timeFormatCommand = `wp option update time_format "${this.config.wordpress.timeFormat}" --path="${this.websitePath}"`;
+        execSync(timeFormatCommand, { stdio: 'pipe' });
+      }
+      
+      // Set start of week
+      if (this.config.wordpress.startOfWeek !== undefined) {
+        const startOfWeekCommand = `wp option update start_of_week ${this.config.wordpress.startOfWeek} --path="${this.websitePath}"`;
+        execSync(startOfWeekCommand, { stdio: 'pipe' });
+      }
+      
+      // Set privacy
+      if (this.config.wordpress.privacy) {
+        const privacyCommand = `wp option update blog_public ${this.config.wordpress.privacy === 'public' ? 1 : 0} --path="${this.websitePath}"`;
+        execSync(privacyCommand, { stdio: 'pipe' });
+      }
+      
+      spinner.succeed('Site settings updated successfully');
+    } catch (error) {
+      spinner.fail('Failed to update site settings');
+      throw error;
+    }
+  }
+
   async manageAdminUser() {
     if (!this.config.sql.source) {
       // No database import, skip admin user management
@@ -1513,58 +1593,10 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       const command = `wp core install --url="${url}" --title="${this.config.wordpress.siteTitle}" --admin_user="${this.config.wordpress.adminUser}" --admin_password="${this.adminPassword}" --admin_email="${this.adminEmail}" --path="${this.websitePath}"`;
       execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
       
-      // Configure WordPress settings
-      if (this.config.wordpress.usePermalinks) {
-        const permalinkCommand = `wp rewrite structure "${this.config.wordpress.permalinkStructure}" --path="${this.websitePath}"`;
-        execSync(permalinkCommand, { stdio: 'pipe' });
-      }
+      spinner.succeed('WordPress installed successfully');
       
-      if (this.config.wordpress.disableComments) {
-        const commentsCommand = `wp option update default_comment_status closed --path="${this.websitePath}"`;
-        execSync(commentsCommand, { stdio: 'pipe' });
-      }
-      
-      if (this.config.wordpress.disableTrackbacks) {
-        const trackbacksCommand = `wp option update default_ping_status closed --path="${this.websitePath}"`;
-        execSync(trackbacksCommand, { stdio: 'pipe' });
-      }
-      
-      if (this.config.wordpress.disablePingbacks) {
-        const pingbacksCommand = `wp option update default_pingback_flag 0 --path="${this.websitePath}"`;
-        execSync(pingbacksCommand, { stdio: 'pipe' });
-      }
-      
-      // Set timezone
-      if (this.config.wordpress.timezone) {
-        const timezoneCommand = `wp option update timezone_string "${this.config.wordpress.timezone}" --path="${this.websitePath}"`;
-        execSync(timezoneCommand, { stdio: 'pipe' });
-      }
-      
-      // Set date format
-      if (this.config.wordpress.dateFormat) {
-        const dateFormatCommand = `wp option update date_format "${this.config.wordpress.dateFormat}" --path="${this.websitePath}"`;
-        execSync(dateFormatCommand, { stdio: 'pipe' });
-      }
-      
-      // Set time format
-      if (this.config.wordpress.timeFormat) {
-        const timeFormatCommand = `wp option update time_format "${this.config.wordpress.timeFormat}" --path="${this.websitePath}"`;
-        execSync(timeFormatCommand, { stdio: 'pipe' });
-      }
-      
-      // Set start of week
-      if (this.config.wordpress.startOfWeek !== undefined) {
-        const startOfWeekCommand = `wp option update start_of_week ${this.config.wordpress.startOfWeek} --path="${this.websitePath}"`;
-        execSync(startOfWeekCommand, { stdio: 'pipe' });
-      }
-      
-      // Set privacy
-      if (this.config.wordpress.privacy) {
-        const privacyCommand = `wp option update blog_public ${this.config.wordpress.privacy === 'public' ? 1 : 0} --path="${this.websitePath}"`;
-        execSync(privacyCommand, { stdio: 'pipe' });
-      }
-      
-      spinner.succeed('WordPress installed and configured successfully');
+      // Apply additional site settings
+      await this.updateSiteSettings();
     } catch (error) {
       spinner.fail('Failed to install WordPress');
       throw error;
@@ -1604,6 +1636,9 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
         await this.importDatabase();
         await this.performSearchReplace();
         await this.manageAdminUser();
+        
+        // Update site settings to ensure config values are applied
+        await this.updateSiteSettings();
         
         // Run after database import hooks
         if (this.config.custom.hooks.afterDatabaseImport && this.config.custom.hooks.afterDatabaseImport.length > 0) {
