@@ -1,0 +1,278 @@
+{
+  "// Server configuration": "Where to create websites and backup settings",
+  "server": {
+    "path": "~/Server",
+    "createSubdirectories": true,
+    "backupExisting": true,
+    "backupPath": "~/Server/backups"
+  },
+  
+  "// Database configuration": "MySQL database settings and user management",
+  "database": {
+    "host": "localhost",
+    "user": "root",
+    "password": "your_mysql_root_password",
+    "port": 3306,
+    "charset": "utf8mb4",
+    "collate": "utf8mb4_unicode_ci",
+    "prefix": "wp_",
+    "createUser": false,
+    "userPrefix": "wp_",
+    "grantPrivileges": ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "INDEX", "ALTER"]
+  },
+  
+  "// WordPress configuration": "WordPress installation and site settings",
+  "wordpress": {
+    "version": "latest",
+    "locale": "en_US",
+    "multisite": false,
+    "multisiteType": "subdirectories",
+    "adminUser": "admin",
+    "adminEmail": "admin@example.com",
+    "adminPassword": "admin123",
+    "siteTitle": "Test Site",
+    "siteDescription": "Just another WordPress site",
+    "privacy": "public",
+    "timezone": "UTC",
+    "dateFormat": "F j, Y",
+    "timeFormat": "g:i a",
+    "startOfWeek": 1,
+    "usePermalinks": true,
+    "permalinkStructure": "/%postname%/",
+    "disableComments": true,
+    "disableTrackbacks": true,
+    "disablePingbacks": true,
+    "autoUpdateCore": false,
+    "autoUpdatePlugins": false,
+    "autoUpdateThemes": false,
+    "memoryLimit": "256M",
+    "maxExecutionTime": 300,
+    "maxInputVars": 3000,
+    "uploadMaxFilesize": "64M",
+    "postMaxSize": "64M"
+  },
+  
+  "// Plugins configuration": "Plugins to install from various sources",
+  "plugins": {
+    "sources": ["wordpress.org", "local", "github", "zip"],
+    "wordpressOrg": [
+      "elementor",
+      "yoast-seo",
+      "woocommerce",
+      "contact-form-7",
+      "akismet",
+      "wordfence"
+    ],
+    "local": [
+      "/path/to/local/plugin1",
+      "/path/to/local/plugin2"
+    ],
+    "github": [
+      {
+        "repo": "user/repo",
+        "branch": "main",
+        "activate": true
+      }
+    ],
+    "zip": [
+      "/path/to/plugin.zip"
+    ],
+    "activateAll": true,
+    "updateAfterInstall": true,
+    "removeDefault": ["hello", "akismet"]
+  },
+  
+  "// Themes configuration": "Themes to install from various sources",
+  "themes": {
+    "sources": ["wordpress.org", "local", "github", "zip"],
+    "wordpressOrg": [
+      "twentytwentyfour",
+      "astra",
+      "oceanwp",
+      "generatepress"
+    ],
+    "local": [
+      "/path/to/local/theme1",
+      "/path/to/local/theme2"
+    ],
+    "github": [
+      {
+        "repo": "user/theme-repo",
+        "branch": "main"
+      }
+    ],
+    "zip": [
+      "/path/to/theme.zip"
+    ],
+    "activate": "twentytwentyfour",
+    "updateAfterInstall": true,
+    "removeDefault": ["twentytwentyone", "twentytwentytwo", "twentytwentythree"]
+  },
+  
+  "// Content configuration": "SQL and uploads import settings",
+  "uploads": {
+    "source": "/path/to/existing/uploads/folder",
+    "preserveStructure": true,
+    "setPermissions": true,
+    "permissions": {
+      "files": "644",
+      "directories": "755"
+    }
+  },
+  
+  "sql": {
+    "source": "/path/to/existing/database.sql",
+    "oldUrl": "http://example.com",
+    "oldDomain": "example.com",
+    "searchReplace": {
+      "enabled": true,
+      "caseSensitive": false,
+      "regex": false,
+      "dryRun": false,
+      "additionalReplacements": [
+        {
+          "search": "old-domain.com",
+          "replace": "new-domain.test"
+        }
+      ]
+    },
+    "optimizeAfterImport": true,
+    "repairAfterImport": true
+  },
+  
+  "// Development tools": "Development and debugging settings",
+  "development": {
+    "enableDebug": true,
+    "debugLog": true,
+    "debugDisplay": false,
+    "scriptDebug": true,
+    "saveQueries": true,
+    "wpDebugLog": true,
+    "wpDebugDisplay": false,
+    "enableErrorReporting": true,
+    "disableFileEditing": true,
+    "disablePluginEditor": true,
+    "disableThemeEditor": true,
+    "forceSSL": false,
+    "sslAdmin": false
+  },
+  
+  "// Valet configuration": "Laravel Valet settings for local development",
+  "valet": {
+    "enabled": true,
+    "linkAfterSetup": true,
+    "secure": false,
+    "park": false,
+    "proxy": false,
+    "domain": ".test"
+  },
+  
+  "// Backup configuration": "Backup settings and retention",
+  "backup": {
+    "enabled": true,
+    "beforeSetup": true,
+    "afterSetup": false,
+    "includeDatabase": true,
+    "includeFiles": true,
+    "compression": "zip",
+    "retention": 7
+  },
+  
+  "// Email configuration": "SMTP settings for email functionality",
+  "email": {
+    "enabled": false,
+    "smtp": {
+      "host": "localhost",
+      "port": 587,
+      "secure": false,
+      "auth": {
+        "user": "",
+        "pass": ""
+      }
+    },
+    "from": "noreply@example.com",
+    "to": "admin@example.com"
+  },
+  
+  "// Security configuration": "Security hardening settings",
+  "security": {
+    "changeTablePrefix": true,
+    "removeVersionInfo": true,
+    "hideLoginErrors": true,
+    "limitLoginAttempts": true,
+    "disableXmlRpc": true,
+    "disableFileEditing": true,
+    "removeReadmeFiles": true,
+    "removeVersionFromHead": true,
+    "removeWlwmanifest": true,
+    "removeRsdLink": true,
+    "removeShortlink": true,
+    "removeRestApiLinks": true,
+    "disableUserEnumeration": true,
+    "disableAuthorPages": true
+  },
+  
+  "// Performance configuration": "Performance optimization settings",
+  "performance": {
+    "enableCaching": true,
+    "cacheType": "object",
+    "enableCompression": true,
+    "optimizeImages": false,
+    "lazyLoad": false,
+    "minifyCss": false,
+    "minifyJs": false,
+    "combineCss": false,
+    "combineJs": false,
+    "cdn": {
+      "enabled": false,
+      "url": ""
+    }
+  },
+  
+  "// Custom configuration": "Custom code and hooks",
+  "custom": {
+    "wpConfig": [
+      "define( 'WP_POST_REVISIONS', 3 );",
+      "define( 'AUTOSAVE_INTERVAL', 300 );"
+    ],
+    "htaccess": [
+      "# Custom .htaccess rules",
+      "RewriteEngine On"
+    ],
+    "functions": [
+      "// Custom functions.php code",
+      "add_action('init', 'my_custom_function');"
+    ],
+    "hooks": {
+      "afterSetup": [
+        "echo 'Setup completed successfully'"
+      ],
+      "beforeSetup": [
+        "echo 'Starting setup...'"
+      ],
+      "afterDatabaseImport": [
+        "wp cache flush"
+      ],
+      "afterSearchReplace": [
+        "wp rewrite flush"
+      ]
+    }
+  },
+  
+  "// Advanced options": "Advanced configuration and debugging",
+  "advanced": {
+    "skipWordPressDownload": false,
+    "skipDatabaseCreation": false,
+    "skipPluginInstallation": false,
+    "skipThemeInstallation": false,
+    "skipUploadsCopy": false,
+    "skipValetSetup": false,
+    "skipSearchReplace": false,
+    "forceOverwrite": false,
+    "verbose": false,
+    "dryRun": false,
+    "parallelDownloads": 3,
+    "timeout": 30000,
+    "retries": 3
+  }
+}

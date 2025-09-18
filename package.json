@@ -1,0 +1,26 @@
+{
+  "name": "wp-script",
+  "version": "1.0.0",
+  "description": "Quick WordPress website setup script for testing",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["wordpress", "cli", "testing", "development"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.1.0",
+    "inquirer": "^9.2.12",
+    "fs-extra": "^11.1.1",
+    "mysql2": "^3.6.5",
+    "axios": "^1.6.2",
+    "chalk": "^4.1.2",
+    "ora": "^5.4.1",
+    "glob": "^10.3.10"
+  },
+  "bin": {
+    "wp-script": "./index.js"
+  }
+}
