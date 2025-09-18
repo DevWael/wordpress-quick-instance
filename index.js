@@ -24,6 +24,7 @@ class WordPressSetup {
     this.websiteName = null;
     this.websitePath = null;
     this.dbName = null;
+    this.selectedTemplate = null;
   }
 
   async loadConfig() {
@@ -39,6 +40,83 @@ class WordPressSetup {
       console.error(chalk.red('Error loading config:'), error.message);
       process.exit(1);
     }
+  }
+
+  async selectTemplate() {
+    // Check if templates are enabled and available
+    if (!this.config.templates || !this.config.templates.enabled || !this.config.templates.list) {
+      console.log(chalk.gray('Templates not configured. Using default configuration.'));
+      return;
+    }
+
+    const templates = this.config.templates.list;
+    const templateKeys = Object.keys(templates);
+
+    if (templateKeys.length === 0) {
+      console.log(chalk.gray('No templates available. Using default configuration.'));
+      return;
+    }
+
+    // If only one template, use it automatically
+    if (templateKeys.length === 1) {
+      this.selectedTemplate = templateKeys[0];
+      console.log(chalk.cyan(`Using template: ${templates[this.selectedTemplate].name}`));
+      return;
+    }
+
+    // Multiple templates - ask user to choose
+    const questions = [
+      {
+        type: 'list',
+        name: 'template',
+        message: 'Select a WordPress site template:',
+        choices: templateKeys.map(key => ({
+          name: `${templates[key].name} - ${templates[key].description}`,
+          value: key
+        })),
+        default: this.config.templates.default || templateKeys[0]
+      }
+    ];
+
+    const answers = await prompt(questions);
+    this.selectedTemplate = answers.template;
+    
+    console.log(chalk.cyan(`Selected template: ${templates[this.selectedTemplate].name}`));
+  }
+
+  mergeTemplateConfig() {
+    if (!this.selectedTemplate || !this.config.templates || !this.config.templates.list) {
+      return;
+    }
+
+    const template = this.config.templates.list[this.selectedTemplate];
+    if (!template) {
+      console.warn(chalk.yellow(`Template '${this.selectedTemplate}' not found. Using default configuration.`));
+      return;
+    }
+
+    console.log(chalk.gray(`Applying template configuration: ${template.name}`));
+
+    // Deep merge template configuration with default config
+    this.config = this.deepMerge(this.config, template);
+  }
+
+  deepMerge(target, source) {
+    const result = { ...target };
+
+    for (const key in source) {
+      if (source.hasOwnProperty(key)) {
+        if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+          // Recursively merge objects
+          result[key] = this.deepMerge(target[key] || {}, source[key]);
+        } else {
+          // Override with source value (including arrays and primitives)
+          result[key] = source[key];
+        }
+      }
+    }
+
+    return result;
   }
 
   async createDefaultConfig() {
@@ -270,6 +348,36 @@ class WordPressSetup {
         }
       },
       
+      // Templates configuration
+      templates: {
+        enabled: true,
+        default: 'basic',
+        list: {
+          basic: {
+            name: 'Basic WordPress Site',
+            description: 'A simple WordPress installation with basic plugins and themes',
+            wordpress: {
+              siteTitle: 'Basic WordPress Site',
+              siteDescription: 'A simple WordPress installation'
+            },
+            plugins: {
+              wordpressOrg: ['akismet', 'contact-form-7'],
+              activateAll: true
+            },
+            themes: {
+              wordpressOrg: ['twentytwentyfour'],
+              activate: 'twentytwentyfour'
+            },
+            sql: {
+              source: null
+            },
+            uploads: {
+              source: null
+            }
+          }
+        }
+      },
+
       // Advanced options
       advanced: {
         skipWordPressDownload: false,
@@ -1660,6 +1768,8 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       console.log(chalk.gray('This script will help you quickly set up a WordPress website for testing.\n'));
 
       await this.loadConfig();
+      await this.selectTemplate();
+      this.mergeTemplateConfig();
       await this.promptForWebsiteName();
       
       console.log(chalk.cyan(`\nSetting up website: ${this.websiteName}`));
@@ -1786,6 +1896,195 @@ program
       });
     } catch (error) {
       console.error(chalk.red('Error reading Server directory:'), error.message);
+    }
+  });
+
+program
+  .command('templates')
+  .description('List all available WordPress site templates')
+  .action(async () => {
+    try {
+      const setup = new WordPressSetup();
+      await setup.loadConfig();
+      
+      if (!setup.config.templates || !setup.config.templates.enabled || !setup.config.templates.list) {
+        console.log(chalk.yellow('Templates are not configured or disabled.'));
+        return;
+      }
+
+      const templates = setup.config.templates.list;
+      const templateKeys = Object.keys(templates);
+
+      if (templateKeys.length === 0) {
+        console.log(chalk.yellow('No templates available.'));
+        return;
+      }
+
+      console.log(chalk.blue.bold('📋 Available WordPress Site Templates:'));
+      console.log(chalk.gray(`Default template: ${setup.config.templates.default || 'none'}\n`));
+
+      templateKeys.forEach(key => {
+        const template = templates[key];
+        console.log(chalk.cyan.bold(`• ${template.name}`));
+        console.log(chalk.gray(`  Key: ${key}`));
+        console.log(chalk.gray(`  Description: ${template.description}`));
+        
+        if (template.wordpress && template.wordpress.siteTitle) {
+          console.log(chalk.gray(`  Site Title: ${template.wordpress.siteTitle}`));
+        }
+        
+        if (template.plugins && template.plugins.wordpressOrg && template.plugins.wordpressOrg.length > 0) {
+          console.log(chalk.gray(`  Plugins: ${template.plugins.wordpressOrg.join(', ')}`));
+        }
+        
+        if (template.themes && template.themes.activate) {
+          console.log(chalk.gray(`  Active Theme: ${template.themes.activate}`));
+        }
+        
+        if (template.sql && template.sql.source) {
+          console.log(chalk.gray(`  SQL Source: ${template.sql.source}`));
+        }
+        
+        console.log(''); // Empty line for spacing
+      });
+    } catch (error) {
+      console.error(chalk.red('Error loading templates:'), error.message);
+    }
+  });
+
+program
+  .command('create-template')
+  .description('Create a new WordPress site template interactively')
+  .action(async () => {
+    try {
+      const setup = new WordPressSetup();
+      await setup.loadConfig();
+      
+      // Ensure templates structure exists
+      if (!setup.config.templates) {
+        setup.config.templates = { enabled: true, default: 'basic', list: {} };
+      }
+      if (!setup.config.templates.list) {
+        setup.config.templates.list = {};
+      }
+
+      const questions = [
+        {
+          type: 'input',
+          name: 'key',
+          message: 'Template key (unique identifier):',
+          validate: (input) => {
+            if (!input.trim()) {
+              return 'Template key is required';
+            }
+            if (!/^[a-zA-Z0-9-_]+$/.test(input)) {
+              return 'Template key can only contain letters, numbers, hyphens, and underscores';
+            }
+            if (setup.config.templates.list[input]) {
+              return 'Template key already exists';
+            }
+            return true;
+          }
+        },
+        {
+          type: 'input',
+          name: 'name',
+          message: 'Template name:',
+          validate: (input) => {
+            if (!input.trim()) {
+              return 'Template name is required';
+            }
+            return true;
+          }
+        },
+        {
+          type: 'input',
+          name: 'description',
+          message: 'Template description:',
+          validate: (input) => {
+            if (!input.trim()) {
+              return 'Template description is required';
+            }
+            return true;
+          }
+        },
+        {
+          type: 'input',
+          name: 'siteTitle',
+          message: 'Default site title:',
+          default: 'My WordPress Site'
+        },
+        {
+          type: 'input',
+          name: 'siteDescription',
+          message: 'Default site description:',
+          default: 'Just another WordPress site'
+        },
+        {
+          type: 'input',
+          name: 'plugins',
+          message: 'WordPress.org plugins (comma-separated):',
+          filter: (input) => input.split(',').map(p => p.trim()).filter(p => p)
+        },
+        {
+          type: 'input',
+          name: 'themes',
+          message: 'WordPress.org themes (comma-separated):',
+          filter: (input) => input.split(',').map(t => t.trim()).filter(t => t)
+        },
+        {
+          type: 'input',
+          name: 'activeTheme',
+          message: 'Active theme (from the themes list):',
+          validate: (input, answers) => {
+            if (!input.trim()) {
+              return 'Active theme is required';
+            }
+            if (answers.themes && answers.themes.length > 0 && !answers.themes.includes(input)) {
+              return 'Active theme must be from the themes list';
+            }
+            return true;
+          }
+        }
+      ];
+
+      const answers = await prompt(questions);
+
+      // Create template object
+      const template = {
+        name: answers.name,
+        description: answers.description,
+        wordpress: {
+          siteTitle: answers.siteTitle,
+          siteDescription: answers.siteDescription
+        },
+        plugins: {
+          wordpressOrg: answers.plugins || [],
+          activateAll: true
+        },
+        themes: {
+          wordpressOrg: answers.themes || [],
+          activate: answers.activeTheme
+        },
+        sql: {
+          source: null
+        },
+        uploads: {
+          source: null
+        }
+      };
+
+      // Add template to config
+      setup.config.templates.list[answers.key] = template;
+
+      // Save config
+      await fs.writeJson(CONFIG_FILE, setup.config, { spaces: 2 });
+
+      console.log(chalk.green(`✅ Template '${answers.name}' created successfully!`));
+      console.log(chalk.cyan(`Key: ${answers.key}`));
+      console.log(chalk.gray('You can now use this template when setting up new WordPress sites.'));
+    } catch (error) {
+      console.error(chalk.red('Error creating template:'), error.message);
     }
   });
 

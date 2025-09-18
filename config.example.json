@@ -268,6 +268,165 @@
     }
   },
   
+  "// Templates configuration": "Predefined WordPress site configurations",
+  "templates": {
+    "enabled": true,
+    "default": "basic",
+    "list": {
+      "basic": {
+        "name": "Basic WordPress Site",
+        "description": "A simple WordPress installation with basic plugins and themes",
+        "wordpress": {
+          "siteTitle": "Basic WordPress Site",
+          "siteDescription": "A simple WordPress installation"
+        },
+        "plugins": {
+          "wordpressOrg": ["akismet", "contact-form-7"],
+          "activateAll": true
+        },
+        "themes": {
+          "wordpressOrg": ["twentytwentyfour"],
+          "activate": "twentytwentyfour"
+        },
+        "sql": {
+          "source": null
+        },
+        "uploads": {
+          "source": null
+        }
+      },
+      "ecommerce": {
+        "name": "E-commerce Site",
+        "description": "WooCommerce-powered online store with essential plugins",
+        "wordpress": {
+          "siteTitle": "E-commerce Store",
+          "siteDescription": "Your online store powered by WooCommerce"
+        },
+        "plugins": {
+          "wordpressOrg": [
+            "woocommerce",
+            "yoast-seo",
+            "elementor",
+            "contact-form-7",
+            "wordfence"
+          ],
+          "activateAll": true
+        },
+        "themes": {
+          "wordpressOrg": ["storefront", "astra"],
+          "activate": "storefront"
+        },
+        "sql": {
+          "source": null
+        },
+        "uploads": {
+          "source": null
+        },
+        "custom": {
+          "hooks": {
+            "afterSetup": [
+              "wp wc update",
+              "wp rewrite flush"
+            ]
+          }
+        }
+      },
+      "blog": {
+        "name": "Blog Site",
+        "description": "Content-focused blog with SEO and social features",
+        "wordpress": {
+          "siteTitle": "My Blog",
+          "siteDescription": "Sharing thoughts and ideas",
+          "disableComments": false
+        },
+        "plugins": {
+          "wordpressOrg": [
+            "yoast-seo",
+            "jetpack",
+            "akismet",
+            "social-warfare",
+            "wp-super-cache"
+          ],
+          "activateAll": true
+        },
+        "themes": {
+          "wordpressOrg": ["twentytwentyfour", "generatepress"],
+          "activate": "twentytwentyfour"
+        },
+        "sql": {
+          "source": null
+        },
+        "uploads": {
+          "source": null
+        }
+      },
+      "portfolio": {
+        "name": "Portfolio Site",
+        "description": "Creative portfolio with visual focus and galleries",
+        "wordpress": {
+          "siteTitle": "My Portfolio",
+          "siteDescription": "Showcasing my creative work"
+        },
+        "plugins": {
+          "wordpressOrg": [
+            "elementor",
+            "envira-gallery-lite",
+            "contact-form-7",
+            "yoast-seo"
+          ],
+          "activateAll": true
+        },
+        "themes": {
+          "wordpressOrg": ["oceanwp", "astra"],
+          "activate": "oceanwp"
+        },
+        "sql": {
+          "source": null
+        },
+        "uploads": {
+          "source": null
+        }
+      },
+      "development": {
+        "name": "Development Site",
+        "description": "Development environment with debugging tools",
+        "wordpress": {
+          "siteTitle": "Development Site",
+          "siteDescription": "Local development environment"
+        },
+        "plugins": {
+          "wordpressOrg": [
+            "query-monitor",
+            "plugin-check",
+            "theme-check",
+            "wp-mailhog-smtp",
+            "automatic-login"
+          ],
+          "activateAll": true
+        },
+        "themes": {
+          "wordpressOrg": ["twentytwentyfour"],
+          "activate": "twentytwentyfour"
+        },
+        "sql": {
+          "source": null
+        },
+        "uploads": {
+          "source": null
+        },
+        "development": {
+          "enableDebug": true,
+          "debugLog": true,
+          "debugDisplay": true,
+          "scriptDebug": true,
+          "saveQueries": true,
+          "wpDebugLog": true,
+          "wpDebugDisplay": true
+        }
+      }
+    }
+  },
+
   "// Advanced options": "Advanced configuration and debugging",
   "advanced": {
     "skipWordPressDownload": false,
