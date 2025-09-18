@@ -5,7 +5,11 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "setup": "node index.js setup",
+    "config": "node index.js config",
+    "list": "node index.js list",
+    "templates": "node index.js templates",
+    "copy": "node index.js copy-site"
   },
   "keywords": [
     "wordpress",

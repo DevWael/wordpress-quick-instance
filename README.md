@@ -2,6 +2,8 @@
 
 A powerful Node.js script for quickly spinning up WordPress websites for testing purposes. This script automates the entire process of setting up a WordPress site with custom content, plugins, themes, and configurations.
 
+This script is fully vipecoded by CursorAI.
+
 ## Features
 
 - 🚀 **Quick WordPress Setup**: Download and install WordPress with a single command
@@ -15,6 +17,17 @@ A powerful Node.js script for quickly spinning up WordPress websites for testing
 - 🚀 **Performance Optimization**: Caching, compression, and optimization settings
 - 📦 **Backup System**: Automatic backup creation and management
 - 🛠️ **Development Tools**: Debug settings, error reporting, and development features
+- 🐳 **Docker Support**: Full Docker MySQL container support with automatic setup
+- 📋 **Site Templates**: Pre-configured WordPress site templates for different use cases
+- 🔍 **Site Analysis**: Analyze existing WordPress sites to detect configuration and URLs
+- 📋 **Site Copying**: Copy existing WordPress sites to create new installations
+- 📊 **Template Creation**: Create templates from existing WordPress sites
+- 🔧 **Interactive Template Builder**: Build custom templates interactively
+- 📧 **Email Configuration**: SMTP settings and email functionality
+- 🔄 **Advanced Search & Replace**: Multiple search-replace operations with regex support
+- 🎯 **Multisite Support**: WordPress multisite installation and configuration
+- 🔐 **Admin User Management**: Automatic admin user creation and password management
+- 📈 **Database Optimization**: Automatic database optimization and repair after import
 
 ## Prerequisites
 
@@ -22,9 +35,10 @@ Before using this script, make sure you have the following installed:
 
 - **Node.js** (v14 or higher)
 - **WP-CLI** (WordPress Command Line Interface)
-- **MySQL** server
+- **MySQL** server (or Docker for containerized MySQL)
 - **Laravel Valet** (for local development)
 - **Git** (for GitHub plugin/theme installations)
+- **Docker** (optional, for containerized MySQL setup)
 
 ### Installing Prerequisites
 
@@ -39,6 +53,14 @@ sudo mv wp-cli.phar /usr/local/bin/wp
 ```bash
 composer global require laravel/valet
 valet install
+```
+
+#### Docker (Optional)
+```bash
+# macOS (using Homebrew)
+brew install docker
+
+# Or download Docker Desktop from https://www.docker.com/products/docker-desktop
 ```
 
 ## Installation
@@ -74,7 +96,7 @@ npm run config
 
 3. Run the setup command:
 ```bash
-npm start setup
+npm run setup
 ```
 
 ### Configuration Options
@@ -88,33 +110,53 @@ The configuration file includes the following sections:
 - **backupPath**: Where to store backups
 
 #### Database Configuration
-- **host**: MySQL host (default: `localhost`)
+- **host**: MySQL host (default: `127.0.0.1`)
 - **user**: MySQL username (default: `root`)
 - **password**: MySQL password
-- **port**: MySQL port (default: `3306`)
+- **port**: MySQL port (default: `3307`)
 - **charset**: Database charset (default: `utf8mb4`)
 - **collate**: Database collation (default: `utf8mb4_unicode_ci`)
 - **prefix**: WordPress table prefix (default: `wp_`)
 - **createUser**: Create dedicated database user
 - **userPrefix**: Prefix for database user names
 - **grantPrivileges**: Database privileges to grant
+- **docker**: Docker MySQL configuration
+  - **enabled**: Enable Docker MySQL (default: `true`)
+  - **containerName**: Docker container name (default: `mysql_docker`)
+  - **image**: MySQL Docker image (default: `mysql:8.0`)
+  - **port**: External port mapping (default: `3307`)
+  - **rootPassword**: Root password for Docker MySQL
+  - **dataVolume**: Docker volume name for data persistence
+  - **network**: Docker network (default: `bridge`)
 
 #### WordPress Configuration
 - **version**: WordPress version to install (default: `latest`)
 - **locale**: WordPress locale (default: `en_US`)
+- **multisite**: Enable WordPress multisite (default: `false`)
+- **multisiteType**: Multisite type - `subdirectories` or `subdomains` (default: `subdirectories`)
 - **adminUser**: Admin username (default: `admin`)
 - **adminEmail**: Admin email address
 - **adminPassword**: Admin password
 - **siteTitle**: Site title
 - **siteDescription**: Site description
-- **timezone**: Site timezone
-- **dateFormat**: Date format
-- **timeFormat**: Time format
-- **usePermalinks**: Enable pretty permalinks
-- **permalinkStructure**: Permalink structure
-- **disableComments**: Disable comments by default
-- **memoryLimit**: PHP memory limit
-- **maxExecutionTime**: PHP max execution time
+- **privacy**: Site privacy setting (default: `public`)
+- **timezone**: Site timezone (default: `UTC`)
+- **dateFormat**: Date format (default: `F j, Y`)
+- **timeFormat**: Time format (default: `g:i a`)
+- **startOfWeek**: Start of week (default: `1`)
+- **usePermalinks**: Enable pretty permalinks (default: `true`)
+- **permalinkStructure**: Permalink structure (default: `/%postname%/`)
+- **disableComments**: Disable comments by default (default: `true`)
+- **disableTrackbacks**: Disable trackbacks (default: `true`)
+- **disablePingbacks**: Disable pingbacks (default: `true`)
+- **autoUpdateCore**: Enable automatic core updates (default: `false`)
+- **autoUpdatePlugins**: Enable automatic plugin updates (default: `false`)
+- **autoUpdateThemes**: Enable automatic theme updates (default: `false`)
+- **memoryLimit**: PHP memory limit (default: `256M`)
+- **maxExecutionTime**: PHP max execution time (default: `300`)
+- **maxInputVars**: PHP max input variables (default: `3000`)
+- **uploadMaxFilesize**: Maximum upload file size (default: `64M`)
+- **postMaxSize**: Maximum POST size (default: `64M`)
 
 #### Plugins Configuration
 - **sources**: Available plugin sources (`wordpress.org`, `local`, `github`, `zip`)
@@ -177,26 +219,64 @@ The configuration file includes the following sections:
 - **htaccess**: Custom .htaccess rules
 - **functions**: Custom functions.php code
 - **hooks**: Custom command hooks
+  - **afterSetup**: Commands to run after setup
+  - **beforeSetup**: Commands to run before setup
+  - **afterDatabaseImport**: Commands to run after database import
+  - **afterSearchReplace**: Commands to run after search-replace
+
+#### Templates Configuration
+- **enabled**: Enable template system (default: `true`)
+- **default**: Default template to use
+- **list**: Available templates with custom configurations
+  - Each template can override any configuration option
+  - Templates can include custom WordPress settings, plugins, themes, uploads, and SQL configurations
+
+#### Email Configuration
+- **enabled**: Enable email functionality (default: `false`)
+- **smtp**: SMTP server configuration
+  - **host**: SMTP host (default: `localhost`)
+  - **port**: SMTP port (default: `587`)
+  - **secure**: Use secure connection (default: `false`)
+  - **auth**: Authentication settings
+    - **user**: SMTP username
+    - **pass**: SMTP password
+- **from**: From email address
+- **to**: To email address
 
 #### Advanced Options
-- **skipWordPressDownload**: Skip WordPress download
-- **skipDatabaseCreation**: Skip database creation
-- **skipPluginInstallation**: Skip plugin installation
-- **skipThemeInstallation**: Skip theme installation
-- **skipUploadsCopy**: Skip uploads copy
-- **skipValetSetup**: Skip Valet setup
-- **skipSearchReplace**: Skip search-replace
-- **forceOverwrite**: Force overwrite existing sites
-- **verbose**: Enable verbose output
-- **dryRun**: Show what would be done without doing it
+- **skipWordPressDownload**: Skip WordPress download (default: `false`)
+- **skipDatabaseCreation**: Skip database creation (default: `false`)
+- **skipPluginInstallation**: Skip plugin installation (default: `false`)
+- **skipThemeInstallation**: Skip theme installation (default: `false`)
+- **skipUploadsCopy**: Skip uploads copy (default: `false`)
+- **skipValetSetup**: Skip Valet setup (default: `false`)
+- **skipSearchReplace**: Skip search-replace (default: `false`)
+- **forceOverwrite**: Force overwrite existing sites (default: `false`)
+- **verbose**: Enable verbose output (default: `false`)
+- **dryRun**: Show what would be done without doing it (default: `false`)
+- **parallelDownloads**: Number of parallel downloads (default: `3`)
+- **timeout**: Request timeout in milliseconds (default: `30000`)
+- **retries**: Number of retry attempts (default: `3`)
 
 ## Usage
+
+### NPM Run Commands
+
+This script provides convenient npm run commands for all operations:
+
+| Command | Description |
+|---------|-------------|
+| `npm run setup` | Set up a new WordPress website |
+| `npm run config` | Open config file for editing |
+| `npm run list` | List all websites in ~/Server |
+| `npm run templates` | List all available templates |
+| `npm run copy` | Copy an existing WordPress site |
 
 ### Basic Usage
 
 ```bash
 # Set up a new WordPress website
-npm start setup
+npm run setup
 
 # Or use the direct command
 node index.js setup
@@ -206,13 +286,43 @@ node index.js setup
 
 ```bash
 # Open config file for editing
-npm start config
+npm run config
 
 # List all websites in ~/Server
-npm start list
+npm run list
+
+# List all available templates
+npm run templates
+
+# Copy an existing WordPress site
+npm run copy <source-path> <new-site-name>
 
 # Show help
 npm start --help
+```
+
+### Additional Commands (Direct CLI)
+
+For advanced operations, you can use the CLI directly:
+
+```bash
+# Create a template from existing site
+node index.js create-template <site-path>
+
+# Create a new template interactively
+node index.js create-template-interactive
+
+# Analyze a WordPress site
+node index.js analyze <site-path>
+
+# Check URLs in a WordPress site
+node index.js check-urls <website-name>
+
+# Update admin email
+node index.js update-admin-email <website-name> <new-email>
+
+# Setup Docker MySQL
+node index.js docker-mysql
 ```
 
 ### Command Line Options
@@ -234,7 +344,7 @@ node index.js setup --dry-run
 
 1. Create a basic WordPress site:
 ```bash
-npm start setup
+npm run setup
 ```
 
 2. Enter website name when prompted
@@ -244,7 +354,7 @@ npm start setup
 
 1. Edit the config file:
 ```bash
-npm start config
+npm run config
 ```
 
 2. Configure your preferences:
@@ -269,7 +379,7 @@ npm start config
 
 3. Run the setup:
 ```bash
-npm start setup
+npm run setup
 ```
 
 ### Example 3: Development Setup
@@ -319,6 +429,94 @@ For a production-like environment:
 }
 ```
 
+### Example 5: Docker MySQL Setup
+
+For using Docker MySQL:
+
+```json
+{
+  "database": {
+    "docker": {
+      "enabled": true,
+      "containerName": "mysql_docker",
+      "image": "mysql:8.0",
+      "port": 3307,
+      "rootPassword": "your_password",
+      "dataVolume": "mysql_data"
+    }
+  }
+}
+```
+
+### Example 6: Template Configuration
+
+Create a custom template:
+
+```json
+{
+  "templates": {
+    "enabled": true,
+    "default": "ecommerce",
+    "list": {
+      "ecommerce": {
+        "name": "E-commerce Site",
+        "description": "WooCommerce store with custom theme",
+        "wordpress": {
+          "siteTitle": "My Store",
+          "siteDescription": "Professional e-commerce store"
+        },
+        "plugins": {
+          "wordpressOrg": ["woocommerce", "yoast-seo", "elementor"],
+          "activateAll": true
+        },
+        "themes": {
+          "activate": "storefront"
+        }
+      }
+    }
+  }
+}
+```
+
+### Example 7: Site Analysis and Copying
+
+Analyze an existing site and copy it:
+
+```bash
+# Analyze a WordPress site
+node index.js analyze /path/to/existing/site
+
+# Copy the site to create a new one
+npm run copy /path/to/existing/site new-site-name
+```
+
+### Example 8: Advanced Search & Replace
+
+Configure multiple search-replace operations:
+
+```json
+{
+  "sql": {
+    "searchReplace": {
+      "enabled": true,
+      "caseSensitive": false,
+      "regex": false,
+      "dryRun": false,
+      "additionalReplacements": [
+        {
+          "search": "https://oldsite.com",
+          "replace": "https://newsite.com"
+        },
+        {
+          "search": "oldsite.com",
+          "replace": "newsite.com"
+        }
+      ]
+    }
+  }
+}
+```
+
 ## File Structure
 
 ```
@@ -356,6 +554,22 @@ wp-script/
    - Check internet connection
    - Verify plugin/theme names are correct
    - Check file paths for local installations
+
+6. **Docker MySQL issues**
+   - Ensure Docker is installed and running
+   - Check if the MySQL container is running: `docker ps`
+   - Start the container: `docker start mysql_docker`
+   - Check container logs: `docker logs mysql_docker`
+
+7. **Template not found**
+   - Verify template name in configuration
+   - Check if templates are enabled in config
+   - Use `npm run templates` to list available templates
+
+8. **Site analysis failed**
+   - Ensure the site path exists and contains WordPress files
+   - Check database connection settings
+   - Verify wp-config.php is readable
 
 ### Debug Mode
 
@@ -423,3 +637,15 @@ If you encounter any issues or have questions:
 - Comprehensive configuration system
 - Backup functionality
 - Security and performance options
+- Docker MySQL support with automatic container setup
+- WordPress site templates system
+- Site analysis and copying functionality
+- Interactive template creation
+- Advanced search-replace with regex support
+- WordPress multisite support
+- Admin user management
+- Database optimization and repair
+- Email configuration with SMTP support
+- Custom hooks and command execution
+- Parallel downloads and retry mechanisms
+- Comprehensive error handling and logging
