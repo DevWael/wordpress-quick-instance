@@ -902,7 +902,7 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
   }
 
   async importDatabase() {
-    if (!this.config.sql.source) {
+    if (!this.config.sql || !this.config.sql.source) {
       console.log(chalk.yellow('No SQL file specified in config. Skipping database import.'));
       return;
     }
@@ -974,7 +974,7 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       return;
     }
 
-    if (!this.config.sql.searchReplace.enabled) {
+    if (!this.config.sql || !this.config.sql.searchReplace || !this.config.sql.searchReplace.enabled) {
       console.log(chalk.yellow('Search-replace disabled in config'));
       return;
     }
@@ -1213,10 +1213,9 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
         execSync(descriptionCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
       }
       
-      // Update admin email
+      // Update admin email directly in database to bypass confirmation
       if (this.adminEmail) {
-        const emailCommand = `wp option update admin_email "${this.adminEmail}" --path="${this.websitePath}"`;
-        execSync(emailCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        await this.updateAdminEmailDirectly(this.adminEmail);
       }
       
       // Configure WordPress settings
@@ -1277,8 +1276,60 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
     }
   }
 
+  async updateAdminEmailDirectly(newEmail) {
+    try {
+      // Get database connection details
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.dbPassword || this.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      // Update admin_email directly in wp_options table
+      let updateCommand;
+      if (this.config.database.docker.enabled) {
+        updateCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "UPDATE \\\`${this.config.database.prefix}options\\\` SET option_value = '${newEmail}' WHERE option_name = 'admin_email'"`;
+      } else {
+        updateCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "UPDATE \\\`${this.config.database.prefix}options\\\` SET option_value = '${newEmail}' WHERE option_name = 'admin_email'"`;
+      }
+      
+      execSync(updateCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      
+      // Also update the user's email in wp_users table if admin user exists
+      let userUpdateCommand;
+      if (this.config.database.docker.enabled) {
+        userUpdateCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "UPDATE \\\`${this.config.database.prefix}users\\\` SET user_email = '${newEmail}' WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+      } else {
+        userUpdateCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "UPDATE \\\`${this.config.database.prefix}users\\\` SET user_email = '${newEmail}' WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+      }
+      
+      try {
+        execSync(userUpdateCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      } catch (userError) {
+        // User might not exist yet, that's okay
+        if (this.config.advanced.verbose) {
+          console.log(chalk.yellow(`Note: Could not update user email (user may not exist yet): ${userError.message}`));
+        }
+      }
+      
+      if (this.config.advanced.verbose) {
+        console.log(chalk.gray(`Admin email updated directly to: ${newEmail}`));
+      }
+    } catch (error) {
+      console.warn(chalk.yellow(`Direct email update failed: ${error.message}`));
+      // Fallback to WP-CLI method if direct update fails
+      try {
+        const emailCommand = `wp option update admin_email "${newEmail}" --path="${this.websitePath}"`;
+        execSync(emailCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        if (this.config.advanced.verbose) {
+          console.log(chalk.gray(`Admin email updated via WP-CLI to: ${newEmail}`));
+        }
+      } catch (wpError) {
+        throw new Error(`Failed to update admin email: ${error.message}`);
+      }
+    }
+  }
+
   async manageAdminUser() {
-    if (!this.config.sql.source) {
+    if (!this.config.sql || !this.config.sql.source) {
       // No database import, skip admin user management
       return;
     }
@@ -1630,7 +1681,7 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       await this.updateWpConfig();
       
       // Install WordPress if no SQL file is provided
-      if (!this.config.sql.source) {
+      if (!this.config.sql || !this.config.sql.source) {
         await this.installWordPress();
       } else {
         await this.importDatabase();
@@ -1755,6 +1806,52 @@ program
       console.log(chalk.green('✅ Docker MySQL container is ready!'));
     } catch (error) {
       console.error(chalk.red('❌ Failed to setup Docker MySQL:'), error.message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('update-email <website> <email>')
+  .description('Update admin email for an existing WordPress website (bypasses confirmation)')
+  .action(async (website, email) => {
+    try {
+      const setup = new WordPressSetup();
+      await setup.loadConfig();
+      
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        console.error(chalk.red('❌ Please enter a valid email address'));
+        process.exit(1);
+      }
+      
+      // Set up website path and database name
+      const serverPath = setup.config.server.path.startsWith('~') 
+        ? path.join(require('os').homedir(), setup.config.server.path.slice(1))
+        : path.resolve(setup.config.server.path);
+      
+      setup.websitePath = path.join(serverPath, website);
+      setup.dbName = `${setup.config.database.userPrefix}${website}`;
+      
+      // Check if website directory exists
+      if (!await fs.pathExists(setup.websitePath)) {
+        console.error(chalk.red(`❌ Website directory not found: ${setup.websitePath}`));
+        process.exit(1);
+      }
+      
+      console.log(chalk.blue(`📧 Updating admin email for: ${website}`));
+      console.log(chalk.gray(`📁 Path: ${setup.websitePath}`));
+      console.log(chalk.gray(`🗄️  Database: ${setup.dbName}`));
+      console.log(chalk.gray(`📧 New email: ${email}\n`));
+      
+      await setup.updateAdminEmailDirectly(email);
+      
+      console.log(chalk.green('✅ Admin email updated successfully!'));
+      console.log(chalk.cyan(`🌐 Your website: http://${website}${setup.config.valet.domain}`));
+      console.log(chalk.cyan(`🌐 Admin login: http://${website}${setup.config.valet.domain}/wp-admin`));
+      
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to update admin email:'), error.message);
       process.exit(1);
     }
   });
