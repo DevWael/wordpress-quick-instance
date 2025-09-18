@@ -10,3 +10,5 @@ node_modules
 .env.development
 .env.test
 .env.production
+config.json
+package-lock.json
