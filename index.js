@@ -119,6 +119,362 @@ class WordPressSetup {
     return result;
   }
 
+  async analyzeWordPressSite(sitePath) {
+    const analysis = {
+      siteTitle: null,
+      siteDescription: null,
+      adminUser: null,
+      adminEmail: null,
+      siteUrl: null,
+      siteDomain: null,
+      activeTheme: null,
+      wordpressOrgPlugins: [],
+      localPlugins: [],
+      wordpressOrgThemes: [],
+      localThemes: [],
+      uploadsPath: null,
+      databasePath: null
+    };
+
+    try {
+      // Analyze wp-config.php for database settings
+      const wpConfigPath = path.join(sitePath, 'wp-config.php');
+      if (await fs.pathExists(wpConfigPath)) {
+        const wpConfig = await fs.readFile(wpConfigPath, 'utf8');
+        
+        // Extract database settings
+        const dbNameMatch = wpConfig.match(/define\s*\(\s*['"]DB_NAME['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+        const dbUserMatch = wpConfig.match(/define\s*\(\s*['"]DB_USER['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+        const dbHostMatch = wpConfig.match(/define\s*\(\s*['"]DB_HOST['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+        const dbPasswordMatch = wpConfig.match(/define\s*\(\s*['"]DB_PASSWORD['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+        const dbPortMatch = wpConfig.match(/define\s*\(\s*['"]DB_PORT['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+        const tablePrefixMatch = wpConfig.match(/\$table_prefix\s*=\s*['"]([^'"]*)['"]/);
+        
+        if (dbNameMatch && dbUserMatch && dbHostMatch) {
+          analysis.databaseName = dbNameMatch[1];
+          analysis.databaseUser = dbUserMatch[1];
+          analysis.databaseHost = dbHostMatch[1];
+          analysis.databasePassword = dbPasswordMatch ? dbPasswordMatch[1] : '';
+          analysis.databasePort = dbPortMatch ? parseInt(dbPortMatch[1]) : 3306;
+          analysis.databasePrefix = tablePrefixMatch ? tablePrefixMatch[1] : 'wp_';
+          
+          console.log(chalk.gray(`  Database: ${analysis.databaseName}@${analysis.databaseHost}:${analysis.databasePort}`));
+          console.log(chalk.gray(`  Table prefix: ${analysis.databasePrefix}`));
+        }
+      }
+
+      // Analyze plugins
+      const pluginsPath = path.join(sitePath, 'wp-content', 'plugins');
+      if (await fs.pathExists(pluginsPath)) {
+        const pluginDirs = await fs.readdir(pluginsPath);
+        
+        for (const pluginDir of pluginDirs) {
+          const pluginPath = path.join(pluginsPath, pluginDir);
+          const pluginStat = await fs.stat(pluginPath);
+          
+          if (pluginStat.isDirectory()) {
+            // Check if it's a WordPress.org plugin by looking for readme.txt
+            const readmePath = path.join(pluginPath, 'readme.txt');
+            if (await fs.pathExists(readmePath)) {
+              const readme = await fs.readFile(readmePath, 'utf8');
+              const slugMatch = readme.match(/^=== (.+) ===/m);
+              if (slugMatch) {
+                // This is likely a WordPress.org plugin
+                analysis.wordpressOrgPlugins.push(pluginDir);
+              } else {
+                // Local plugin
+                analysis.localPlugins.push(pluginPath);
+              }
+            } else {
+              // No readme.txt, likely a local plugin
+              analysis.localPlugins.push(pluginPath);
+            }
+          }
+        }
+      }
+
+      // Analyze themes
+      const themesPath = path.join(sitePath, 'wp-content', 'themes');
+      if (await fs.pathExists(themesPath)) {
+        const themeDirs = await fs.readdir(themesPath);
+        
+        for (const themeDir of themeDirs) {
+          const themePath = path.join(themesPath, themeDir);
+          const themeStat = await fs.stat(themePath);
+          
+          if (themeStat.isDirectory()) {
+            // Check if it's a WordPress.org theme by looking for style.css with proper header
+            const stylePath = path.join(themePath, 'style.css');
+            if (await fs.pathExists(stylePath)) {
+              const style = await fs.readFile(stylePath, 'utf8');
+              const themeNameMatch = style.match(/Theme Name:\s*(.+)/);
+              const themeUriMatch = style.match(/Theme URI:\s*(.+)/);
+              
+              if (themeNameMatch) {
+                if (themeUriMatch && themeUriMatch[1].includes('wordpress.org')) {
+                  // WordPress.org theme
+                  analysis.wordpressOrgThemes.push(themeDir);
+                } else {
+                  // Local theme
+                  analysis.localThemes.push(themePath);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Check for uploads folder
+      const uploadsPath = path.join(sitePath, 'wp-content', 'uploads');
+      if (await fs.pathExists(uploadsPath)) {
+        analysis.uploadsPath = uploadsPath;
+      }
+
+      // Try to get site information from database if possible
+      try {
+        if (analysis.databaseName && analysis.databaseUser) {
+          await this.analyzeDatabase(analysis);
+        }
+      } catch (error) {
+        console.log(chalk.yellow(`⚠️  Could not analyze database: ${error.message}`));
+        
+        // Fallback: Try to extract URL from wp-config.php constants
+        if (wpConfig) {
+          const wpUrlMatch = wpConfig.match(/define\s*\(\s*['"]WP_HOME['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+          const wpSiteUrlMatch = wpConfig.match(/define\s*\(\s*['"]WP_SITEURL['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+          
+          if (wpUrlMatch) {
+            analysis.siteUrl = wpUrlMatch[1];
+            try {
+              const url = new URL(analysis.siteUrl);
+              analysis.siteDomain = url.hostname;
+              console.log(chalk.green(`  ✅ Detected site URL from wp-config: ${analysis.siteUrl}`));
+            } catch (e) {
+              console.log(chalk.yellow(`  ⚠️  Invalid URL format in wp-config: ${analysis.siteUrl}`));
+            }
+          } else if (wpSiteUrlMatch) {
+            analysis.siteUrl = wpSiteUrlMatch[1];
+            try {
+              const url = new URL(analysis.siteUrl);
+              analysis.siteDomain = url.hostname;
+              console.log(chalk.green(`  ✅ Detected site URL from wp-config: ${analysis.siteUrl}`));
+            } catch (e) {
+              console.log(chalk.yellow(`  ⚠️  Invalid URL format in wp-config: ${analysis.siteUrl}`));
+            }
+          }
+        }
+      }
+
+      // Try to get active theme from database or wp-config
+      if (!analysis.activeTheme && analysis.wordpressOrgThemes.length > 0) {
+        analysis.activeTheme = analysis.wordpressOrgThemes[0];
+      }
+
+    } catch (error) {
+      console.warn(chalk.yellow(`Warning during site analysis: ${error.message}`));
+    }
+
+    return analysis;
+  }
+
+  async analyzeDatabase(analysis) {
+    try {
+      // Create database connection using the source site's database credentials
+      const connection = await mysql.createConnection({
+        host: analysis.databaseHost || 'localhost',
+        user: analysis.databaseUser,
+        password: analysis.databasePassword || '', // Use the source site's password
+        port: analysis.databasePort || 3306,
+        database: analysis.databaseName
+      });
+
+      // Get site information
+      const [siteRows] = await connection.execute(
+        `SELECT option_name, option_value FROM ${analysis.databasePrefix || 'wp_'}options 
+         WHERE option_name IN ('blogname', 'blogdescription', 'admin_email', 'home', 'siteurl')`
+      );
+
+      let homeUrl = null;
+      let siteUrl = null;
+
+      for (const row of siteRows) {
+        switch (row.option_name) {
+          case 'blogname':
+            analysis.siteTitle = row.option_value;
+            break;
+          case 'blogdescription':
+            analysis.siteDescription = row.option_value;
+            break;
+          case 'admin_email':
+            analysis.adminEmail = row.option_value;
+            break;
+          case 'home':
+            homeUrl = row.option_value;
+            break;
+          case 'siteurl':
+            siteUrl = row.option_value;
+            break;
+        }
+      }
+
+      // Use home URL as primary, fallback to siteurl
+      analysis.siteUrl = homeUrl || siteUrl;
+      
+      if (analysis.siteUrl) {
+        try {
+          const url = new URL(analysis.siteUrl);
+          analysis.siteDomain = url.hostname;
+          console.log(chalk.green(`  ✅ Detected site URL: ${analysis.siteUrl}`));
+          console.log(chalk.green(`  ✅ Detected domain: ${analysis.siteDomain}`));
+        } catch (e) {
+          console.log(chalk.yellow(`  ⚠️  Invalid URL format: ${analysis.siteUrl}`));
+        }
+      } else {
+        console.log(chalk.yellow(`  ⚠️  No site URL found in database`));
+      }
+
+      // Get active theme
+      const [themeRows] = await connection.execute(
+        `SELECT option_value FROM ${analysis.databasePrefix || 'wp_'}options 
+         WHERE option_name = 'stylesheet'`
+      );
+
+      if (themeRows.length > 0) {
+        analysis.activeTheme = themeRows[0].option_value;
+      }
+
+      // Get admin user
+      const [userRows] = await connection.execute(
+        `SELECT user_login FROM ${this.config.database.prefix || 'wp_'}users 
+         WHERE ID = 1`
+      );
+
+      if (userRows.length > 0) {
+        analysis.adminUser = userRows[0].user_login;
+      }
+
+      await connection.end();
+    } catch (error) {
+      // Database analysis failed, continue with file-based analysis
+      console.log(chalk.yellow(`Database analysis failed: ${error.message}`));
+    }
+  }
+
+  async exportDatabase(analysis, outputPath) {
+    try {
+      const passwordParam = this.config.database.password === '' ? '' : `-p${this.config.database.password}`;
+      
+      let command;
+      if (this.config.database.docker.enabled) {
+        // For Docker MySQL
+        command = `docker exec ${this.config.database.docker.containerName} mysqldump -hlocalhost -u${analysis.databaseUser} ${passwordParam} -P3306 --single-transaction --routines --triggers ${analysis.databaseName} > "${outputPath}"`;
+      } else {
+        // For regular MySQL
+        command = `mysqldump -h${analysis.databaseHost || 'localhost'} -u${analysis.databaseUser} ${passwordParam} -P${this.config.database.port || 3306} --single-transaction --routines --triggers ${analysis.databaseName} > "${outputPath}"`;
+      }
+      
+      execSync(command, { stdio: 'pipe' });
+      
+      // Verify the export was successful
+      if (await fs.pathExists(outputPath)) {
+        const stats = await fs.stat(outputPath);
+        if (stats.size > 0) {
+          return true;
+        } else {
+          throw new Error('Database export file is empty');
+        }
+      } else {
+        throw new Error('Database export file was not created');
+      }
+    } catch (error) {
+      throw new Error(`Failed to export database: ${error.message}`);
+    }
+  }
+
+  async importDatabaseFromFile(sqlPath) {
+    try {
+      if (!await fs.pathExists(sqlPath)) {
+        throw new Error(`SQL file not found: ${sqlPath}`);
+      }
+
+      // Use dedicated user credentials if created, otherwise use root
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.dbPassword || this.config.database.password;
+
+      let command;
+      if (this.config.database.docker.enabled) {
+        // For Docker, use docker exec with input redirection
+        const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+        command = `docker exec -i ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} < "${sqlPath}"`;
+      } else {
+        // For regular MySQL
+        const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+        command = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} < "${sqlPath}"`;
+      }
+      
+      execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      
+      // Optimize database if configured
+      if (this.config.sql && this.config.sql.optimizeAfterImport) {
+        let optimizeCommand;
+        if (this.config.database.docker.enabled) {
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          optimizeCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "OPTIMIZE TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        } else {
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          optimizeCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "OPTIMIZE TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        }
+        execSync(optimizeCommand, { stdio: 'pipe' });
+      }
+      
+      // Repair database if configured
+      if (this.config.sql && this.config.sql.repairAfterImport) {
+        let repairCommand;
+        if (this.config.database.docker.enabled) {
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          repairCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "REPAIR TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        } else {
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          repairCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "REPAIR TABLE wp_posts, wp_postmeta, wp_options, wp_usermeta, wp_users, wp_terms, wp_term_taxonomy, wp_term_relationships, wp_termmeta, wp_comments, wp_commentmeta;"`;
+        }
+        execSync(repairCommand, { stdio: 'pipe' });
+      }
+      
+    } catch (error) {
+      throw new Error(`Failed to import database: ${error.message}`);
+    }
+  }
+
+  async updateWordPressUrls(newUrl) {
+    try {
+      // Use dedicated user credentials if created, otherwise use root
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.dbPassword || this.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      // Update home and siteurl options
+      const updateCommands = [
+        `UPDATE \\\`${this.config.database.prefix}options\\\` SET option_value = '${newUrl}' WHERE option_name = 'home'`,
+        `UPDATE \\\`${this.config.database.prefix}options\\\` SET option_value = '${newUrl}' WHERE option_name = 'siteurl'`
+      ];
+      
+      for (const updateCommand of updateCommands) {
+        let command;
+        if (this.config.database.docker.enabled) {
+          command = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "${updateCommand}"`;
+        } else {
+          command = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "${updateCommand}"`;
+        }
+        
+        execSync(command, { stdio: 'pipe' });
+      }
+      
+      console.log(chalk.green(`✅ WordPress URLs updated to: ${newUrl}`));
+    } catch (error) {
+      console.warn(chalk.yellow(`⚠️  Failed to update WordPress URLs: ${error.message}`));
+    }
+  }
+
   async createDefaultConfig() {
     const defaultConfig = {
       // Server configuration
@@ -1216,9 +1572,9 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       
       let checkCommand;
       if (this.config.database.docker.enabled) {
-        checkCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "SELECT COUNT(*) as count FROM ${this.config.database.prefix}users WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+        checkCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "SELECT COUNT(*) as count FROM \\\`${this.config.database.prefix}users\\\` WHERE user_login = '${this.config.wordpress.adminUser}'"`;
       } else {
-        checkCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "SELECT COUNT(*) as count FROM ${this.config.database.prefix}users WHERE user_login = '${this.config.wordpress.adminUser}'"`;
+        checkCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "SELECT COUNT(*) as count FROM \\\`${this.config.database.prefix}users\\\` WHERE user_login = '${this.config.wordpress.adminUser}'"`;
       }
       
       const output = execSync(checkCommand, { stdio: 'pipe' }).toString();
@@ -1242,14 +1598,64 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
     const spinner = ora('Updating admin user password...').start();
     
     try {
+      // First, try to get the user ID to make sure the user exists
+      const getUserCommand = `wp user get ${this.config.wordpress.adminUser} --field=ID --path="${this.websitePath}"`;
+      let userId;
+      
+      try {
+        userId = execSync(getUserCommand, { stdio: 'pipe' }).toString().trim();
+        if (!userId || isNaN(userId)) {
+          throw new Error('User not found');
+        }
+      } catch (getUserError) {
+        spinner.fail('Admin user not found, will create new user instead');
+        await this.createAdminUser();
+        return;
+      }
+      
       // Use WP-CLI to update the user password
-      const command = `wp user update ${this.config.wordpress.adminUser} --user_pass="${this.adminPassword}" --path="${this.websitePath}"`;
+      const command = `wp user update ${userId} --user_pass="${this.adminPassword}" --path="${this.websitePath}"`;
       execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
       
       spinner.succeed('Admin user password updated successfully');
     } catch (error) {
       spinner.fail('Failed to update admin user password');
-      throw error;
+      console.log(chalk.yellow(`WP-CLI error: ${error.message}`));
+      
+      // Try direct database update as fallback
+      try {
+        console.log(chalk.blue('Trying direct database update...'));
+        await this.updateAdminUserPasswordDirect();
+        spinner.succeed('Admin user password updated via direct database update');
+      } catch (dbError) {
+        console.log(chalk.yellow(`Direct database update also failed: ${dbError.message}`));
+        throw error;
+      }
+    }
+  }
+
+  async updateAdminUserPasswordDirect() {
+    try {
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.dbPassword || this.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      // Hash the password using WordPress's password hashing
+      const hashedPassword = require('crypto').createHash('md5').update(this.adminPassword).digest('hex');
+      
+      // Update the user password directly in the database
+      const updateCommand = `UPDATE \\\`${this.config.database.prefix}users\\\` SET user_pass = '${hashedPassword}' WHERE user_login = '${this.config.wordpress.adminUser}'`;
+      
+      let command;
+      if (this.config.database.docker.enabled) {
+        command = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "${updateCommand}"`;
+      } else {
+        command = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "${updateCommand}"`;
+      }
+      
+      execSync(command, { stdio: 'pipe' });
+    } catch (error) {
+      throw new Error(`Direct database update failed: ${error.message}`);
     }
   }
 
@@ -1311,14 +1717,24 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
     try {
       // Update site title
       if (this.config.wordpress.siteTitle) {
-        const titleCommand = `wp option update blogname "${this.config.wordpress.siteTitle}" --path="${this.websitePath}"`;
-        execSync(titleCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        try {
+          const titleCommand = `wp option update blogname "${this.config.wordpress.siteTitle}" --path="${this.websitePath}"`;
+          execSync(titleCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        } catch (wpError) {
+          console.log(chalk.yellow('WP-CLI title update failed, trying direct database update...'));
+          await this.updateSiteOptionDirect('blogname', this.config.wordpress.siteTitle);
+        }
       }
       
       // Update site description
       if (this.config.wordpress.siteDescription) {
-        const descriptionCommand = `wp option update blogdescription "${this.config.wordpress.siteDescription}" --path="${this.websitePath}"`;
-        execSync(descriptionCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        try {
+          const descriptionCommand = `wp option update blogdescription "${this.config.wordpress.siteDescription}" --path="${this.websitePath}"`;
+          execSync(descriptionCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+        } catch (wpError) {
+          console.log(chalk.yellow('WP-CLI description update failed, trying direct database update...'));
+          await this.updateSiteOptionDirect('blogdescription', this.config.wordpress.siteDescription);
+        }
       }
       
       // Update admin email directly in database to bypass confirmation
@@ -1380,7 +1796,31 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       spinner.succeed('Site settings updated successfully');
     } catch (error) {
       spinner.fail('Failed to update site settings');
-      throw error;
+      console.log(chalk.yellow(`Site settings error: ${error.message}`));
+      // Don't throw error, just log it and continue
+    }
+  }
+
+  async updateSiteOptionDirect(optionName, optionValue) {
+    try {
+      const dbUser = this.dbUser || this.config.database.user;
+      const dbPassword = this.dbPassword || this.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      // Update the option directly in the database
+      const updateCommand = `UPDATE \\\`${this.config.database.prefix}options\\\` SET option_value = '${optionValue.replace(/'/g, "\\'")}' WHERE option_name = '${optionName}'`;
+      
+      let command;
+      if (this.config.database.docker.enabled) {
+        command = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "${updateCommand}"`;
+      } else {
+        command = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "${updateCommand}"`;
+      }
+      
+      execSync(command, { stdio: 'pipe' });
+      console.log(chalk.green(`✅ Updated ${optionName} via direct database update`));
+    } catch (error) {
+      console.log(chalk.yellow(`⚠️  Direct database update failed for ${optionName}: ${error.message}`));
     }
   }
 
@@ -1953,6 +2393,506 @@ program
   });
 
 program
+  .command('copy-site <sourcePath> <newSiteName>')
+  .description('Copy an existing WordPress website to create a new site')
+  .action(async (sourcePath, newSiteName) => {
+    try {
+      const setup = new WordPressSetup();
+      await setup.loadConfig();
+      
+      const resolvedSourcePath = path.resolve(sourcePath);
+      
+      // Validate that the source path exists and is a WordPress site
+      if (!await fs.pathExists(resolvedSourcePath)) {
+        console.error(chalk.red(`❌ Source path does not exist: ${resolvedSourcePath}`));
+        process.exit(1);
+      }
+
+      const wpConfigPath = path.join(resolvedSourcePath, 'wp-config.php');
+      if (!await fs.pathExists(wpConfigPath)) {
+        console.error(chalk.red(`❌ Not a valid WordPress site: ${resolvedSourcePath}`));
+        console.error(chalk.red('   wp-config.php not found'));
+        process.exit(1);
+      }
+
+      // Validate new site name
+      if (!/^[a-zA-Z0-9-_]+$/.test(newSiteName)) {
+        console.error(chalk.red('❌ Site name can only contain letters, numbers, hyphens, and underscores'));
+        process.exit(1);
+      }
+
+      console.log(chalk.blue(`🔄 Copying WordPress site from: ${resolvedSourcePath}`));
+      console.log(chalk.blue(`📝 Creating new site: ${newSiteName}`));
+
+      // Set up the new site details
+      setup.websiteName = newSiteName;
+      
+      // Resolve server path
+      const serverPath = setup.config.server.path.startsWith('~') 
+        ? path.join(require('os').homedir(), setup.config.server.path.slice(1))
+        : path.resolve(setup.config.server.path);
+      
+      setup.websitePath = path.join(serverPath, setup.websiteName);
+      setup.dbName = `${setup.config.database.userPrefix}${setup.websiteName}`;
+
+      // Check if new site already exists
+      if (await fs.pathExists(setup.websitePath)) {
+        const { overwrite } = await prompt([
+          {
+            type: 'confirm',
+            name: 'overwrite',
+            message: `Site '${newSiteName}' already exists. Do you want to overwrite it?`,
+            default: false
+          }
+        ]);
+        
+        if (!overwrite) {
+          console.log(chalk.yellow('Operation cancelled.'));
+          process.exit(0);
+        }
+        
+        // Backup existing site if configured
+        if (setup.config.backup.enabled && setup.config.backup.beforeSetup) {
+          console.log(chalk.blue('📦 Creating backup of existing site...'));
+          await setup.createBackup();
+        }
+        
+        await fs.remove(setup.websitePath);
+      }
+
+      // Analyze the source site
+      console.log(chalk.blue('🔍 Analyzing source WordPress site...'));
+      const siteAnalysis = await setup.analyzeWordPressSite(resolvedSourcePath);
+
+      // Copy WordPress files
+      console.log(chalk.blue('📁 Copying WordPress files...'));
+      await fs.copy(resolvedSourcePath, setup.websitePath);
+
+      // Create new database
+      console.log(chalk.blue('🗄️  Creating new database...'));
+      await setup.createDatabase();
+
+      // Export and import database
+      if (siteAnalysis.databaseName) {
+        console.log(chalk.blue('📦 Exporting source database...'));
+        const tempDbPath = path.join(__dirname, 'temp-database.sql');
+        await setup.exportDatabase(siteAnalysis, tempDbPath);
+
+        console.log(chalk.blue('📥 Importing database to new site...'));
+        await setup.importDatabaseFromFile(tempDbPath);
+
+        // Clean up temp file
+        await fs.remove(tempDbPath);
+      }
+
+      // Update wp-config.php for new site
+      console.log(chalk.blue('⚙️  Updating wp-config.php...'));
+      await setup.updateWpConfig();
+
+      // Perform search-replace
+      let oldUrl = siteAnalysis.siteUrl;
+      let oldDomain = siteAnalysis.siteDomain;
+      
+      // If we couldn't get the URL from database analysis, try to extract it from the copied wp-config.php
+      if (!oldUrl) {
+        console.log(chalk.yellow('⚠️  No URL detected from database analysis, trying to extract from wp-config.php...'));
+        
+        try {
+          const wpConfigPath = path.join(setup.websitePath, 'wp-config.php');
+          if (await fs.pathExists(wpConfigPath)) {
+            const wpConfig = await fs.readFile(wpConfigPath, 'utf8');
+            
+            // Try to find URL constants in wp-config.php
+            const wpUrlMatch = wpConfig.match(/define\s*\(\s*['"]WP_HOME['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+            const wpSiteUrlMatch = wpConfig.match(/define\s*\(\s*['"]WP_SITEURL['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+            
+            if (wpUrlMatch) {
+              oldUrl = wpUrlMatch[1];
+            } else if (wpSiteUrlMatch) {
+              oldUrl = wpSiteUrlMatch[1];
+            }
+            
+            if (oldUrl) {
+              try {
+                const url = new URL(oldUrl);
+                oldDomain = url.hostname;
+                console.log(chalk.green(`  ✅ Extracted URL from wp-config.php: ${oldUrl}`));
+              } catch (e) {
+                console.log(chalk.yellow(`  ⚠️  Invalid URL format in wp-config.php: ${oldUrl}`));
+              }
+            }
+          }
+        } catch (error) {
+          console.log(chalk.yellow(`  ⚠️  Could not read wp-config.php: ${error.message}`));
+        }
+      }
+      
+      // If we still don't have a URL, try to get it from the database after import
+      if (!oldUrl) {
+        console.log(chalk.yellow('⚠️  No URL found in wp-config.php, trying to get from imported database...'));
+        
+        try {
+          // Query the imported database for URLs
+          const dbUser = setup.config.database.user;
+          const dbPassword = setup.config.database.password;
+          const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+          
+          let queryCommand;
+          if (setup.config.database.docker.enabled) {
+            queryCommand = `docker exec ${setup.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${setup.dbName} -e "SELECT option_value FROM ${setup.config.database.prefix}options WHERE option_name = 'home' LIMIT 1;"`;
+          } else {
+            queryCommand = `mysql -h${setup.config.database.host} -u${dbUser} ${passwordParam} -P${setup.config.database.port} ${setup.dbName} -e "SELECT option_value FROM ${setup.config.database.prefix}options WHERE option_name = 'home' LIMIT 1;"`;
+          }
+          
+          const output = execSync(queryCommand, { stdio: 'pipe' }).toString();
+          const lines = output.split('\n').filter(line => line.trim() && !line.includes('option_value'));
+          
+          if (lines.length > 0) {
+            oldUrl = lines[0].trim();
+            try {
+              const url = new URL(oldUrl);
+              oldDomain = url.hostname;
+              console.log(chalk.green(`  ✅ Found URL in imported database: ${oldUrl}`));
+            } catch (e) {
+              console.log(chalk.yellow(`  ⚠️  Invalid URL format in database: ${oldUrl}`));
+            }
+          }
+        } catch (error) {
+          console.log(chalk.yellow(`  ⚠️  Could not query imported database: ${error.message}`));
+        }
+      }
+      
+      if (oldUrl) {
+        console.log(chalk.blue('🔄 Performing search-replace...'));
+        
+        // Set up the new URL
+        const newUrl = `http://${setup.websiteName}${setup.config.valet.domain}`;
+        const newDomain = `${setup.websiteName}${setup.config.valet.domain}`;
+        
+        console.log(chalk.gray(`  Old URL: ${oldUrl}`));
+        console.log(chalk.gray(`  New URL: ${newUrl}`));
+        console.log(chalk.gray(`  Old Domain: ${oldDomain || new URL(oldUrl).hostname}`));
+        console.log(chalk.gray(`  New Domain: ${newDomain}`));
+        
+        setup.config.sql = {
+          oldUrl: oldUrl,
+          oldDomain: oldDomain || new URL(oldUrl).hostname,
+          searchReplace: {
+            enabled: true,
+            caseSensitive: false,
+            regex: false,
+            dryRun: false,
+            additionalReplacements: [
+              // Domain without protocol
+              {
+                search: oldUrl.replace(/^https?:\/\//, ''),
+                replace: newDomain
+              },
+              // HTTPS version
+              {
+                search: oldUrl.replace(/^https?:\/\//, 'https://'),
+                replace: newUrl
+              },
+              // HTTP version
+              {
+                search: oldUrl.replace(/^https?:\/\//, 'http://'),
+                replace: newUrl
+              },
+              // JSON encoded URLs
+              {
+                search: oldUrl.replace(/^https?:\/\//, 'https:\\/\\/'),
+                replace: newUrl.replace(/:/g, '\\:').replace(/\//g, '\\/')
+              },
+              {
+                search: oldUrl.replace(/^https?:\/\//, 'http:\\/\\/'),
+                replace: newUrl.replace(/:/g, '\\:').replace(/\//g, '\\/')
+              },
+              // Serialized PHP URLs
+              {
+                search: `s:${oldUrl.length}:"${oldUrl}"`,
+                replace: `s:${newUrl.length}:"${newUrl}"`
+              }
+            ]
+          }
+        };
+        
+        // Temporarily override the performSearchReplace method to use our new URL
+        const originalPerformSearchReplace = setup.performSearchReplace.bind(setup);
+        setup.performSearchReplace = async function() {
+          const oldUrl = this.config.sql.oldUrl || 'http://example.com';
+          const newUrl = `http://${this.websiteName}${this.config.valet.domain}`;
+          
+          const oldDomain = this.config.sql.oldDomain || 'example.com';
+          const newDomain = `${this.websiteName}${this.config.valet.domain}`;
+          
+          // Perform main URL replacement
+          if (oldUrl !== newUrl) {
+            const dryRunFlag = this.config.sql.searchReplace.dryRun ? '--dry-run' : '';
+            const caseSensitiveFlag = this.config.sql.searchReplace.caseSensitive ? '--case-sensitive' : '';
+            const regexFlag = this.config.sql.searchReplace.regex ? '--regex' : '';
+            
+            const command = `wp search-replace "${oldUrl}" "${newUrl}" --path="${this.websitePath}" --all-tables ${dryRunFlag} ${caseSensitiveFlag} ${regexFlag}`;
+            
+            try {
+              execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+            } catch (wpError) {
+              console.log(chalk.yellow('WP-CLI search-replace failed, trying direct MySQL approach...'));
+              await this.performDirectSearchReplace(oldUrl, newUrl);
+            }
+          }
+          
+          // Perform domain replacement
+          if (oldDomain !== newDomain) {
+            const dryRunFlag = this.config.sql.searchReplace.dryRun ? '--dry-run' : '';
+            const caseSensitiveFlag = this.config.sql.searchReplace.caseSensitive ? '--case-sensitive' : '';
+            const regexFlag = this.config.sql.searchReplace.regex ? '--regex' : '';
+            
+            const domainCommand = `wp search-replace "${oldDomain}" "${newDomain}" --path="${this.websitePath}" --all-tables ${dryRunFlag} ${caseSensitiveFlag} ${regexFlag}`;
+            
+            try {
+              execSync(domainCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+            } catch (wpError) {
+              console.log(chalk.yellow('WP-CLI domain replacement failed, trying direct MySQL approach...'));
+              await this.performDirectSearchReplace(oldDomain, newDomain);
+            }
+          }
+          
+          // Perform additional replacements
+          if (this.config.sql.searchReplace.additionalReplacements && this.config.sql.searchReplace.additionalReplacements.length > 0) {
+            for (const replacement of this.config.sql.searchReplace.additionalReplacements) {
+              const dryRunFlag = this.config.sql.searchReplace.dryRun ? '--dry-run' : '';
+              const caseSensitiveFlag = this.config.sql.searchReplace.caseSensitive ? '--case-sensitive' : '';
+              const regexFlag = this.config.sql.searchReplace.regex ? '--regex' : '';
+              
+              const additionalCommand = `wp search-replace "${replacement.search}" "${replacement.replace}" --path="${this.websitePath}" --all-tables ${dryRunFlag} ${caseSensitiveFlag} ${regexFlag}`;
+              
+              try {
+                execSync(additionalCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+              } catch (wpError) {
+                console.log(chalk.yellow(`WP-CLI replacement failed for "${replacement.search}", trying direct MySQL approach...`));
+                await this.performDirectSearchReplace(replacement.search, replacement.replace);
+              }
+            }
+          }
+        };
+        
+        await setup.performSearchReplace();
+        
+        // Restore original method
+        setup.performSearchReplace = originalPerformSearchReplace;
+        
+        // Update WordPress site URLs directly in database
+        console.log(chalk.blue('🔗 Updating WordPress site URLs...'));
+        await setup.updateWordPressUrls(newUrl);
+      } else {
+        console.log(chalk.yellow('⚠️  No URL detected for search-replace. You may need to manually update URLs.'));
+        console.log(chalk.yellow('   Use the check-urls command to see current URLs and update them manually if needed.'));
+      }
+
+      // Update admin user if needed
+      if (siteAnalysis.adminUser) {
+        console.log(chalk.blue('👤 Updating admin user...'));
+        setup.config.wordpress.adminUser = siteAnalysis.adminUser;
+        await setup.manageAdminUser();
+      }
+
+      // Update site settings
+      console.log(chalk.blue('⚙️  Updating site settings...'));
+      if (siteAnalysis.siteTitle) {
+        setup.config.wordpress.siteTitle = siteAnalysis.siteTitle;
+      }
+      if (siteAnalysis.siteDescription) {
+        setup.config.wordpress.siteDescription = siteAnalysis.siteDescription;
+      }
+      await setup.updateSiteSettings();
+
+      // Setup Valet
+      console.log(chalk.blue('🔗 Setting up Valet...'));
+      await setup.setupValet();
+
+      // Create final backup if configured
+      if (setup.config.backup.enabled && setup.config.backup.afterSetup) {
+        console.log(chalk.blue('📦 Creating final backup...'));
+        await setup.createBackup();
+      }
+
+      console.log(chalk.green.bold('\n✅ WordPress site copied successfully!'));
+      console.log(chalk.cyan(`🌐 Your new website is available at: http${setup.config.valet.secure ? 's' : ''}://${setup.websiteName}${setup.config.valet.domain}`));
+      console.log(chalk.cyan(`🌐 Admin login: http${setup.config.valet.secure ? 's' : ''}://${setup.websiteName}${setup.config.valet.domain}/wp-admin`));
+      console.log(chalk.gray(`📁 Website files: ${setup.websitePath}`));
+      console.log(chalk.gray(`🗄️  Database: ${setup.dbName}`));
+      console.log(chalk.gray(`👤 Admin user: ${setup.config.wordpress.adminUser}`));
+      console.log(chalk.gray(`📧 Admin email: ${setup.config.wordpress.adminEmail}`));
+
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to copy WordPress site:'), error.message);
+      if (setup.config && setup.config.advanced && setup.config.advanced.verbose) {
+        console.error(error.stack);
+      }
+      process.exit(1);
+    }
+  });
+
+program
+  .command('create-template-from-site <path>')
+  .description('Create a template from an existing WordPress website')
+  .action(async (sitePath) => {
+    try {
+      const setup = new WordPressSetup();
+      await setup.loadConfig();
+      
+      // Ensure templates structure exists
+      if (!setup.config.templates) {
+        setup.config.templates = { enabled: true, default: 'basic', list: {} };
+      }
+      if (!setup.config.templates.list) {
+        setup.config.templates.list = {};
+      }
+
+      const resolvedPath = path.resolve(sitePath);
+      
+      // Validate that the path exists and is a WordPress site
+      if (!await fs.pathExists(resolvedPath)) {
+        console.error(chalk.red(`❌ Path does not exist: ${resolvedPath}`));
+        process.exit(1);
+      }
+
+      const wpConfigPath = path.join(resolvedPath, 'wp-config.php');
+      if (!await fs.pathExists(wpConfigPath)) {
+        console.error(chalk.red(`❌ Not a valid WordPress site: ${resolvedPath}`));
+        console.error(chalk.red('   wp-config.php not found'));
+        process.exit(1);
+      }
+
+      console.log(chalk.blue(`🔍 Analyzing WordPress site: ${resolvedPath}`));
+
+      // Analyze the WordPress site
+      const siteAnalysis = await setup.analyzeWordPressSite(resolvedPath);
+      
+      // Prompt for template details
+      const questions = [
+        {
+          type: 'input',
+          name: 'key',
+          message: 'Template key (unique identifier):',
+          validate: (input) => {
+            if (!input.trim()) {
+              return 'Template key is required';
+            }
+            if (!/^[a-zA-Z0-9-_]+$/.test(input)) {
+              return 'Template key can only contain letters, numbers, hyphens, and underscores';
+            }
+            if (setup.config.templates.list[input]) {
+              return 'Template key already exists';
+            }
+            return true;
+          }
+        },
+        {
+          type: 'input',
+          name: 'name',
+          message: 'Template name:',
+          default: siteAnalysis.siteTitle || 'WordPress Site Template'
+        },
+        {
+          type: 'input',
+          name: 'description',
+          message: 'Template description:',
+          default: `Template created from ${path.basename(resolvedPath)}`
+        },
+        {
+          type: 'confirm',
+          name: 'includeUploads',
+          message: 'Include uploads folder in template?',
+          default: true
+        },
+        {
+          type: 'confirm',
+          name: 'includeDatabase',
+          message: 'Include database export in template?',
+          default: false
+        }
+      ];
+
+      const answers = await prompt(questions);
+
+      // Export database if requested
+      if (answers.includeDatabase && siteAnalysis.databaseName) {
+        console.log(chalk.blue('📦 Exporting database...'));
+        try {
+          const dbExportPath = path.join(path.dirname(CONFIG_FILE), `${answers.key}-database.sql`);
+          await setup.exportDatabase(siteAnalysis, dbExportPath);
+          siteAnalysis.databasePath = dbExportPath;
+          console.log(chalk.green(`✅ Database exported to: ${dbExportPath}`));
+        } catch (error) {
+          console.warn(chalk.yellow(`⚠️  Database export failed: ${error.message}`));
+          answers.includeDatabase = false;
+        }
+      }
+
+      // Create template object
+      const template = {
+        name: answers.name,
+        description: answers.description,
+        wordpress: {
+          siteTitle: siteAnalysis.siteTitle || 'WordPress Site',
+          siteDescription: siteAnalysis.siteDescription || 'Just another WordPress site',
+          adminUser: siteAnalysis.adminUser || 'admin',
+          adminEmail: siteAnalysis.adminEmail || 'admin@example.com'
+        },
+        plugins: {
+          wordpressOrg: siteAnalysis.wordpressOrgPlugins || [],
+          local: siteAnalysis.localPlugins || [],
+          activateAll: true
+        },
+        themes: {
+          wordpressOrg: siteAnalysis.wordpressOrgThemes || [],
+          local: siteAnalysis.localThemes || [],
+          activate: siteAnalysis.activeTheme || 'twentytwentyfour'
+        },
+        sql: {
+          source: answers.includeDatabase ? siteAnalysis.databasePath : null,
+          oldUrl: siteAnalysis.siteUrl || 'http://example.com',
+          oldDomain: siteAnalysis.siteDomain || 'example.com'
+        },
+        uploads: {
+          source: answers.includeUploads ? siteAnalysis.uploadsPath : null,
+          preserveStructure: true,
+          setPermissions: true,
+          permissions: {
+            files: '644',
+            directories: '755'
+          }
+        }
+      };
+
+      // Add template to config
+      setup.config.templates.list[answers.key] = template;
+
+      // Save config
+      await fs.writeJson(CONFIG_FILE, setup.config, { spaces: 2 });
+
+      console.log(chalk.green(`✅ Template '${answers.name}' created successfully!`));
+      console.log(chalk.cyan(`Key: ${answers.key}`));
+      console.log(chalk.gray(`Based on: ${resolvedPath}`));
+      
+      if (siteAnalysis.wordpressOrgPlugins.length > 0) {
+        console.log(chalk.gray(`WordPress.org plugins: ${siteAnalysis.wordpressOrgPlugins.join(', ')}`));
+      }
+      if (siteAnalysis.localPlugins.length > 0) {
+        console.log(chalk.gray(`Local plugins: ${siteAnalysis.localPlugins.length} found`));
+      }
+      if (siteAnalysis.activeTheme) {
+        console.log(chalk.gray(`Active theme: ${siteAnalysis.activeTheme}`));
+      }
+      
+      console.log(chalk.gray('You can now use this template when setting up new WordPress sites.'));
+    } catch (error) {
+      console.error(chalk.red('Error creating template from site:'), error.message);
+    }
+  });
+
+program
   .command('create-template')
   .description('Create a new WordPress site template interactively')
   .action(async () => {
@@ -2105,6 +3045,226 @@ program
       console.log(chalk.green('✅ Docker MySQL container is ready!'));
     } catch (error) {
       console.error(chalk.red('❌ Failed to setup Docker MySQL:'), error.message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('analyze-site <path>')
+  .description('Analyze a WordPress site to detect its configuration and URLs')
+  .action(async (sitePath) => {
+    try {
+      const setup = new WordPressSetup();
+      await setup.loadConfig();
+      
+      const resolvedPath = path.resolve(sitePath);
+      
+      // Validate that the path exists and is a WordPress site
+      if (!await fs.pathExists(resolvedPath)) {
+        console.error(chalk.red(`❌ Path does not exist: ${resolvedPath}`));
+        process.exit(1);
+      }
+
+      const wpConfigPath = path.join(resolvedPath, 'wp-config.php');
+      if (!await fs.pathExists(wpConfigPath)) {
+        console.error(chalk.red(`❌ Not a valid WordPress site: ${resolvedPath}`));
+        console.error(chalk.red('   wp-config.php not found'));
+        process.exit(1);
+      }
+
+      console.log(chalk.blue(`🔍 Analyzing WordPress site: ${resolvedPath}\n`));
+      
+      const analysis = await setup.analyzeWordPressSite(resolvedPath);
+      
+      console.log(chalk.cyan.bold('📋 Site Analysis Results:'));
+      console.log('');
+      
+      if (analysis.siteTitle) {
+        console.log(chalk.cyan('Site Title:'));
+        console.log(chalk.gray(`  ${analysis.siteTitle}`));
+        console.log('');
+      }
+      
+      if (analysis.siteDescription) {
+        console.log(chalk.cyan('Site Description:'));
+        console.log(chalk.gray(`  ${analysis.siteDescription}`));
+        console.log('');
+      }
+      
+      if (analysis.siteUrl) {
+        console.log(chalk.cyan('Site URL:'));
+        console.log(chalk.gray(`  ${analysis.siteUrl}`));
+        console.log('');
+      }
+      
+      if (analysis.siteDomain) {
+        console.log(chalk.cyan('Domain:'));
+        console.log(chalk.gray(`  ${analysis.siteDomain}`));
+        console.log('');
+      }
+      
+      if (analysis.adminEmail) {
+        console.log(chalk.cyan('Admin Email:'));
+        console.log(chalk.gray(`  ${analysis.adminEmail}`));
+        console.log('');
+      }
+      
+      if (analysis.activeTheme) {
+        console.log(chalk.cyan('Active Theme:'));
+        console.log(chalk.gray(`  ${analysis.activeTheme}`));
+        console.log('');
+      }
+      
+      if (analysis.databaseName) {
+        console.log(chalk.cyan('Database:'));
+        console.log(chalk.gray(`  Name: ${analysis.databaseName}`));
+        console.log(chalk.gray(`  Host: ${analysis.databaseHost}`));
+        console.log(chalk.gray(`  Port: ${analysis.databasePort}`));
+        console.log(chalk.gray(`  User: ${analysis.databaseUser}`));
+        console.log(chalk.gray(`  Prefix: ${analysis.databasePrefix}`));
+        console.log('');
+      }
+      
+      if (analysis.wordpressOrgPlugins.length > 0) {
+        console.log(chalk.cyan('WordPress.org Plugins:'));
+        analysis.wordpressOrgPlugins.forEach(plugin => {
+          console.log(chalk.gray(`  - ${plugin}`));
+        });
+        console.log('');
+      }
+      
+      if (analysis.localPlugins.length > 0) {
+        console.log(chalk.cyan('Local Plugins:'));
+        analysis.localPlugins.forEach(plugin => {
+          console.log(chalk.gray(`  - ${plugin}`));
+        });
+        console.log('');
+      }
+      
+      if (analysis.wordpressOrgThemes.length > 0) {
+        console.log(chalk.cyan('WordPress.org Themes:'));
+        analysis.wordpressOrgThemes.forEach(theme => {
+          console.log(chalk.gray(`  - ${theme}`));
+        });
+        console.log('');
+      }
+      
+      if (analysis.localThemes.length > 0) {
+        console.log(chalk.cyan('Local Themes:'));
+        analysis.localThemes.forEach(theme => {
+          console.log(chalk.gray(`  - ${theme}`));
+        });
+        console.log('');
+      }
+      
+      if (analysis.uploadsPath) {
+        console.log(chalk.cyan('Uploads:'));
+        console.log(chalk.gray(`  ${analysis.uploadsPath}`));
+        console.log('');
+      }
+      
+      if (!analysis.siteUrl) {
+        console.log(chalk.red('❌ No site URL detected! This will cause issues with search-replace.'));
+        console.log(chalk.yellow('   Make sure the database is accessible and contains valid URL settings.'));
+      } else {
+        console.log(chalk.green('✅ Site analysis completed successfully!'));
+        console.log(chalk.green('   This site can be copied using the copy-site command.'));
+      }
+      
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to analyze site:'), error.message);
+      if (setup.config && setup.config.advanced && setup.config.advanced.verbose) {
+        console.error(error.stack);
+      }
+      process.exit(1);
+    }
+  });
+
+program
+  .command('check-urls <website>')
+  .description('Check current URLs in a WordPress website database')
+  .action(async (website) => {
+    try {
+      const setup = new WordPressSetup();
+      await setup.loadConfig();
+      
+      // Set up website path and database name
+      const serverPath = setup.config.server.path.startsWith('~') 
+        ? path.join(require('os').homedir(), setup.config.server.path.slice(1))
+        : path.resolve(setup.config.server.path);
+      
+      setup.websitePath = path.join(serverPath, website);
+      setup.dbName = `${setup.config.database.userPrefix}${website}`;
+      
+      // Check if website directory exists
+      if (!await fs.pathExists(setup.websitePath)) {
+        console.error(chalk.red(`❌ Website directory not found: ${setup.websitePath}`));
+        process.exit(1);
+      }
+      
+      console.log(chalk.blue(`🔍 Checking URLs for: ${website}`));
+      console.log(chalk.gray(`📁 Path: ${setup.websitePath}`));
+      console.log(chalk.gray(`🗄️  Database: ${setup.dbName}\n`));
+      
+      // Get database connection details
+      const dbUser = setup.config.database.user;
+      const dbPassword = setup.config.database.password;
+      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
+      
+      // Query for URL-related options
+      let queryCommand;
+      if (setup.config.database.docker.enabled) {
+        queryCommand = `docker exec ${setup.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${setup.dbName} -e "SELECT option_name, option_value FROM ${setup.config.database.prefix}options WHERE option_name IN ('home', 'siteurl', 'admin_email', 'blogname') ORDER BY option_name;"`;
+      } else {
+        queryCommand = `mysql -h${setup.config.database.host} -u${dbUser} ${passwordParam} -P${setup.config.database.port} ${setup.dbName} -e "SELECT option_name, option_value FROM ${setup.config.database.prefix}options WHERE option_name IN ('home', 'siteurl', 'admin_email', 'blogname') ORDER BY option_name;"`;
+      }
+      
+      const output = execSync(queryCommand, { stdio: 'pipe' }).toString();
+      const lines = output.split('\n').filter(line => line.trim() && !line.includes('option_name'));
+      
+      console.log(chalk.cyan.bold('📋 Current WordPress Settings:'));
+      console.log('');
+      
+      for (const line of lines) {
+        const [optionName, optionValue] = line.split('\t');
+        if (optionName && optionValue) {
+          const label = optionName === 'home' ? 'Home URL' :
+                       optionName === 'siteurl' ? 'Site URL' :
+                       optionName === 'admin_email' ? 'Admin Email' :
+                       optionName === 'blogname' ? 'Site Title' : optionName;
+          
+          console.log(chalk.cyan(`${label}:`));
+          console.log(chalk.gray(`  ${optionValue}`));
+          console.log('');
+        }
+      }
+      
+      // Check for any URLs in post content that might be problematic
+      console.log(chalk.cyan.bold('🔍 Checking for hardcoded URLs in content...'));
+      
+      let contentQueryCommand;
+      if (setup.config.database.docker.enabled) {
+        contentQueryCommand = `docker exec ${setup.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${setup.dbName} -e "SELECT COUNT(*) as count FROM ${setup.config.database.prefix}posts WHERE post_content LIKE '%http%' AND post_status = 'publish';"`;
+      } else {
+        contentQueryCommand = `mysql -h${setup.config.database.host} -u${dbUser} ${passwordParam} -P${setup.config.database.port} ${setup.dbName} -e "SELECT COUNT(*) as count FROM ${setup.config.database.prefix}posts WHERE post_content LIKE '%http%' AND post_status = 'publish';"`;
+      }
+      
+      try {
+        const contentOutput = execSync(contentQueryCommand, { stdio: 'pipe' }).toString();
+        const contentLines = contentOutput.split('\n').filter(line => line.trim() && !line.includes('count'));
+        if (contentLines.length > 0) {
+          const count = parseInt(contentLines[0].trim());
+          console.log(chalk.yellow(`⚠️  Found ${count} published posts with hardcoded URLs`));
+          console.log(chalk.gray('   You may need to run search-replace to update these URLs'));
+        } else {
+          console.log(chalk.green('✅ No hardcoded URLs found in published posts'));
+        }
+      } catch (error) {
+        console.log(chalk.yellow(`⚠️  Could not check post content: ${error.message}`));
+      }
+      
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to check URLs:'), error.message);
       process.exit(1);
     }
   });
