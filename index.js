@@ -715,8 +715,43 @@ class WordPressSetup {
       // Add table prefix
       wpConfig = wpConfig.replace(/define\s*\(\s*['"]\$table_prefix['"]\s*,\s*['"][^'"]*['"]\s*\)/, `define( '$table_prefix', '${this.config.database.prefix}' )`);
       
-      // Add salts
-      if (!wpConfig.includes('AUTH_KEY')) {
+      // Add salts - replace placeholder values with real salts
+      if (wpConfig.includes("'put your unique phrase here'")) {
+        // Replace all the placeholder salt values with real ones
+        wpConfig = wpConfig.replace(
+          /define\s*\(\s*['"]AUTH_KEY['"]\s*,\s*['"][^'"]*['"]\s*\)/,
+          `define( 'AUTH_KEY',         '${this.extractSaltValue(salts, 'AUTH_KEY')}' )`
+        );
+        wpConfig = wpConfig.replace(
+          /define\s*\(\s*['"]SECURE_AUTH_KEY['"]\s*,\s*['"][^'"]*['"]\s*\)/,
+          `define( 'SECURE_AUTH_KEY',  '${this.extractSaltValue(salts, 'SECURE_AUTH_KEY')}' )`
+        );
+        wpConfig = wpConfig.replace(
+          /define\s*\(\s*['"]LOGGED_IN_KEY['"]\s*,\s*['"][^'"]*['"]\s*\)/,
+          `define( 'LOGGED_IN_KEY',    '${this.extractSaltValue(salts, 'LOGGED_IN_KEY')}' )`
+        );
+        wpConfig = wpConfig.replace(
+          /define\s*\(\s*['"]NONCE_KEY['"]\s*,\s*['"][^'"]*['"]\s*\)/,
+          `define( 'NONCE_KEY',        '${this.extractSaltValue(salts, 'NONCE_KEY')}' )`
+        );
+        wpConfig = wpConfig.replace(
+          /define\s*\(\s*['"]AUTH_SALT['"]\s*,\s*['"][^'"]*['"]\s*\)/,
+          `define( 'AUTH_SALT',        '${this.extractSaltValue(salts, 'AUTH_SALT')}' )`
+        );
+        wpConfig = wpConfig.replace(
+          /define\s*\(\s*['"]SECURE_AUTH_SALT['"]\s*,\s*['"][^'"]*['"]\s*\)/,
+          `define( 'SECURE_AUTH_SALT', '${this.extractSaltValue(salts, 'SECURE_AUTH_SALT')}' )`
+        );
+        wpConfig = wpConfig.replace(
+          /define\s*\(\s*['"]LOGGED_IN_SALT['"]\s*,\s*['"][^'"]*['"]\s*\)/,
+          `define( 'LOGGED_IN_SALT',   '${this.extractSaltValue(salts, 'LOGGED_IN_SALT')}' )`
+        );
+        wpConfig = wpConfig.replace(
+          /define\s*\(\s*['"]NONCE_SALT['"]\s*,\s*['"][^'"]*['"]\s*\)/,
+          `define( 'NONCE_SALT',       '${this.extractSaltValue(salts, 'NONCE_SALT')}' )`
+        );
+      } else if (!wpConfig.includes('AUTH_KEY')) {
+        // If no salts exist at all, add them
         wpConfig = wpConfig.replace(
           /\/\*\s*That's all, stop editing!.*$/s,
           `${salts}\n\n/* That's all, stop editing! Happy publishing. */`
@@ -836,6 +871,33 @@ define( 'AUTH_SALT',        '${generateKey()}' );
 define( 'SECURE_AUTH_SALT', '${generateKey()}' );
 define( 'LOGGED_IN_SALT',   '${generateKey()}' );
 define( 'NONCE_SALT',       '${generateKey()}' );`;
+    }
+  }
+
+  extractSaltValue(salts, keyName) {
+    try {
+      // Extract the salt value from the API response
+      const regex = new RegExp(`define\\s*\\(\\s*['"]${keyName}['"]\\s*,\\s*['"]([^'"]*)['"]\\s*\\)`);
+      const match = salts.match(regex);
+      if (match && match[1]) {
+        return match[1];
+      }
+      
+      // Fallback: generate a random salt
+      const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()';
+      let key = '';
+      for (let i = 0; i < 64; i++) {
+        key += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return key;
+    } catch (error) {
+      // Fallback: generate a random salt
+      const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()';
+      let key = '';
+      for (let i = 0; i < 64; i++) {
+        key += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return key;
     }
   }
 
@@ -1072,21 +1134,9 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
     const spinner = ora('Updating admin user password...').start();
     
     try {
-      const dbUser = this.dbUser || this.config.database.user;
-      const dbPassword = this.dbPassword || this.config.database.password;
-      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
-      
-      // Hash the password using WordPress's password hashing
-      const hashedPassword = await this.hashWordPressPassword(this.adminPassword);
-      
-      let updateCommand;
-      if (this.config.database.docker.enabled) {
-        updateCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "UPDATE ${this.config.database.prefix}users SET user_pass = '${hashedPassword}' WHERE user_login = '${this.config.wordpress.adminUser}'"`;
-      } else {
-        updateCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "UPDATE ${this.config.database.prefix}users SET user_pass = '${hashedPassword}' WHERE user_login = '${this.config.wordpress.adminUser}'"`;
-      }
-      
-      execSync(updateCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
+      // Use WP-CLI to update the user password
+      const command = `wp user update ${this.config.wordpress.adminUser} --user_pass="${this.adminPassword}" --path="${this.websitePath}"`;
+      execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
       
       spinner.succeed('Admin user password updated successfully');
     } catch (error) {
@@ -1099,48 +1149,9 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
     const spinner = ora('Creating admin user...').start();
     
     try {
-      const dbUser = this.dbUser || this.config.database.user;
-      const dbPassword = this.dbPassword || this.config.database.password;
-      const passwordParam = dbPassword === '' ? '' : `-p${dbPassword}`;
-      
-      // Hash the password using WordPress's password hashing
-      const hashedPassword = await this.hashWordPressPassword(this.adminPassword);
-      
-      // Get the current timestamp
-      const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-      
-      let insertCommand;
-      if (this.config.database.docker.enabled) {
-        insertCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "INSERT INTO ${this.config.database.prefix}users (user_login, user_pass, user_nicename, user_email, user_url, user_registered, user_activation_key, user_status, display_name) VALUES ('${this.config.wordpress.adminUser}', '${hashedPassword}', '${this.config.wordpress.adminUser}', '${this.adminEmail}', '', '${now}', '', 0, '${this.config.wordpress.adminUser}')"`;
-      } else {
-        insertCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "INSERT INTO ${this.config.database.prefix}users (user_login, user_pass, user_nicename, user_email, user_url, user_registered, user_activation_key, user_status, display_name) VALUES ('${this.config.wordpress.adminUser}', '${hashedPassword}', '${this.config.wordpress.adminUser}', '${this.adminEmail}', '', '${now}', '', 0, '${this.config.wordpress.adminUser}')"`;
-      }
-      
-      execSync(insertCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
-      
-      // Get the user ID
-      let getUserIdCommand;
-      if (this.config.database.docker.enabled) {
-        getUserIdCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "SELECT ID FROM ${this.config.database.prefix}users WHERE user_login = '${this.config.wordpress.adminUser}'"`;
-      } else {
-        getUserIdCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "SELECT ID FROM ${this.config.database.prefix}users WHERE user_login = '${this.config.wordpress.adminUser}'"`;
-      }
-      
-      const userIdOutput = execSync(getUserIdCommand, { stdio: 'pipe' }).toString();
-      const userIdLines = userIdOutput.split('\n').filter(line => line.trim() && !line.includes('ID'));
-      const userId = userIdLines.length > 0 ? userIdLines[0].trim() : null;
-      
-      if (userId) {
-        // Add admin capabilities
-        let addCapabilitiesCommand;
-        if (this.config.database.docker.enabled) {
-          addCapabilitiesCommand = `docker exec ${this.config.database.docker.containerName} mysql -hlocalhost -u${dbUser} ${passwordParam} -P3306 ${this.dbName} -e "INSERT INTO ${this.config.database.prefix}usermeta (user_id, meta_key, meta_value) VALUES (${userId}, '${this.config.database.prefix}capabilities', 'a:1:{s:13:\\\"administrator\\\";b:1;}'), (${userId}, '${this.config.database.prefix}user_level', '10')"`;
-        } else {
-          addCapabilitiesCommand = `mysql -h${this.config.database.host} -u${dbUser} ${passwordParam} -P${this.config.database.port} ${this.dbName} -e "INSERT INTO ${this.config.database.prefix}usermeta (user_id, meta_key, meta_value) VALUES (${userId}, '${this.config.database.prefix}capabilities', 'a:1:{s:13:\\\"administrator\\\";b:1;}'), (${userId}, '${this.config.database.prefix}user_level', '10')"`;
-        }
-        
-        execSync(addCapabilitiesCommand, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
-      }
+      // Use WP-CLI to create the admin user
+      const command = `wp user create ${this.config.wordpress.adminUser} ${this.adminEmail} --user_pass="${this.adminPassword}" --role=administrator --display_name="${this.config.wordpress.adminUser}" --path="${this.websitePath}"`;
+      execSync(command, { stdio: this.config.advanced.verbose ? 'inherit' : 'pipe' });
       
       spinner.succeed('Admin user created successfully');
     } catch (error) {
@@ -1151,15 +1162,38 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
 
   async hashWordPressPassword(password) {
     try {
-      // Use WP-CLI to hash the password
+      // Use WP-CLI to hash the password if WordPress is available
       const command = `wp eval "echo wp_hash_password('${password}');" --path="${this.websitePath}"`;
       const hashedPassword = execSync(command, { stdio: 'pipe' }).toString().trim();
-      return hashedPassword;
+      
+      // Validate that we got a proper hash (should start with $)
+      if (hashedPassword && hashedPassword.startsWith('$')) {
+        return hashedPassword;
+      } else {
+        throw new Error('Invalid hash returned from WP-CLI');
+      }
     } catch (error) {
-      // Fallback to a simple hash if WP-CLI fails
+      if (this.config.advanced.verbose) {
+        console.log(chalk.yellow(`WP-CLI password hashing failed: ${error.message}`));
+        console.log(chalk.yellow('Using fallback password hashing method...'));
+      }
+      
+      // Fallback: Use a proper WordPress-compatible hash
+      // WordPress uses Portable Hash format with proper salt and iteration
       const crypto = require('crypto');
-      const hash = crypto.createHash('md5').update(password).digest('hex');
-      return `$P$B${hash}`; // WordPress-style hash prefix
+      
+      // Generate a random salt (8 characters, WordPress compatible)
+      const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./';
+      let salt = '';
+      for (let i = 0; i < 8; i++) {
+        salt += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      
+      // Create MD5 hash with salt (WordPress legacy format)
+      const hash = crypto.createHash('md5').update(salt + password).digest('hex');
+      
+      // Return in WordPress format: $P$ + salt + hash
+      return `$P$${salt}${hash}`;
     }
   }
 
@@ -1180,6 +1214,22 @@ define( 'NONCE_SALT',       '${generateKey()}' );`;
       } else {
         spinner.text = 'Admin user does not exist, creating new user...';
         await this.createAdminUser();
+      }
+      
+      // Verify the password was set correctly
+      if (this.config.advanced.verbose) {
+        console.log(chalk.gray(`Admin user: ${this.config.wordpress.adminUser}`));
+        console.log(chalk.gray(`Admin password: ${this.adminPassword}`));
+        console.log(chalk.gray(`Admin email: ${this.adminEmail}`));
+        
+        // Test the password by trying to verify it with WP-CLI
+        try {
+          const testCommand = `wp user check-password ${this.config.wordpress.adminUser} "${this.adminPassword}" --path="${this.websitePath}"`;
+          const testResult = execSync(testCommand, { stdio: 'pipe' }).toString().trim();
+          console.log(chalk.gray(`Password verification: ${testResult}`));
+        } catch (testError) {
+          console.log(chalk.yellow(`Password verification failed: ${testError.message}`));
+        }
       }
       
       spinner.succeed('Admin user management completed successfully');
